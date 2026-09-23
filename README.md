@@ -11,6 +11,13 @@ container or on the host, in any mixture.
 It only ever installs here. A second machine runs it too, and `inbuxa join`
 points that machine at a server already running elsewhere.
 
+Linux only, and it says so on any other system rather than reporting a
+machine that does not exist. Debian, Red Hat and Arch families, and the
+derivatives people run: Ubuntu, Fedora, Rocky, CentOS, CachyOS. It uses
+whichever container runtime the distribution ships -- docker where there is
+one, podman on the Red Hat family -- and refuses a shape the machine cannot
+deliver, with the reason.
+
 ## What works today
 
 This is early. What is built:
@@ -56,6 +63,7 @@ The installer writes units, creates users and takes ports 25 and 443, so it
 is tested on a throwaway virtual machine rather than on anybody's desk:
 
     e2e/vm/up.sh                              a Debian 13 machine, in qemu, as you
+    DISTRO=fedora e2e/vm/up.sh                or fedora, rocky9, ubuntu2404, arch, debian12
     e2e/vm/run.sh e2e/cases/survey.sh         what it says about a machine
     e2e/vm/run.sh e2e/cases/deps.sh           the offer, and taking it
     e2e/vm/run.sh e2e/cases/install-local.sh   a whole suite, and signing in to it

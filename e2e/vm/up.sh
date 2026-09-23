@@ -7,10 +7,17 @@
 # The installer writes units, creates users, takes 25 and 443 and can install
 # a web server. None of that belongs on a workstation, and none of it can be
 # proved in a container either -- systemd, users and ports are the thing under
-# test. So: a Debian cloud image in qemu, seeded with cloud-init, with a copy
-# of the disk kept the moment it is up. Every run starts from that copy, so a
-# run can break the machine as thoroughly as it likes.
+# test. So: a distribution's own cloud image in qemu, seeded with cloud-init,
+# with a copy of the disk kept the moment it is up. Every run starts from that
+# copy, so a run can break the machine as thoroughly as it likes.
 #
+# DISTRO picks which: debian13 (the default), debian12, ubuntu2404, fedora,
+# rocky9 or arch. They are not interchangeable, which is the point -- podman
+# rather than docker on the Red Hat family, firewalld on by default there, and
+# a glibc on Rocky 9 older than the server binary needs. Each has its own
+# directory and ssh port, so several can be up at once.
+#
+#   DISTRO=fedora e2e/vm/up.sh
 #   e2e/vm/up.sh       build it and keep a clean copy (idempotent)
 #   e2e/vm/reset.sh    back to the clean copy, a few seconds
 #   e2e/vm/run.sh      build the installer, copy it in, run a case inside
@@ -24,13 +31,16 @@
 # Needs: qemu-system-x86_64, /dev/kvm, xorriso, ssh, curl.
 set -euo pipefail
 
-LAB="${LAB:-$HOME/.cache/inbuxa-lab}"
+. "$(dirname "$0")/lib.sh"
+
+DISTRO="${DISTRO:-debian13}"
+LAB="${LAB:-$HOME/.cache/inbuxa-lab/$DISTRO}"
 MEM="${MEM:-4096}"
 VCPUS="${VCPUS:-2}"
 DISK_GB="${DISK_GB:-20}"
-SSH_PORT="${SSH_PORT:-2222}"
-BASE_URL="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
-BASE="$LAB/debian-13-base.qcow2"
+SSH_PORT="${SSH_PORT:-$(distro_port "$DISTRO")}"
+BASE_URL="${BASE_URL:-$(distro_image "$DISTRO")}"
+BASE="$LAB/base.qcow2"
 DISK="$LAB/lab.qcow2"
 CLEAN="$LAB/lab-clean.qcow2"
 SEED="$LAB/seed.iso"
@@ -39,8 +49,8 @@ PIDFILE="$LAB/qemu.pid"
 KEY="${KEY:-$HOME/.ssh/id_ed25519.pub}"
 
 say() { echo "==> $*"; }
-. "$(dirname "$0")/lib.sh"
 
+[ -n "$BASE_URL" ] || { echo "unknown distribution '$DISTRO' (debian13, debian12, ubuntu2404, fedora, rocky9, arch)" >&2; exit 1; }
 [ -r "$KEY" ] || { echo "no public key at $KEY (set KEY=)" >&2; exit 1; }
 [ -w /dev/kvm ] || { echo "no writable /dev/kvm -- is this user in the kvm group?" >&2; exit 1; }
 

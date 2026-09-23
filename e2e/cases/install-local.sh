@@ -21,6 +21,20 @@ has()  { grep -q -- "$2" <<<"$1" && ok "$3" || { bad "$3"; echo "$1" | tail -20 
 
 DIR=/var/lib/inbuxa
 
+# Whichever runtime this machine has. The installer picks docker where there
+# is one and podman on the Red Hat family; a case that says "docker" only
+# tests half the distributions it is run on.
+if command -v docker >/dev/null 2>&1; then
+  RT=docker
+  compose() { docker compose -f "$DIR/compose.yaml" "$@"; }
+else
+  RT=podman
+  compose() {
+    DOCKER_HOST=unix:///run/podman/podman.sock \
+      /usr/local/lib/docker/cli-plugins/docker-compose -f "$DIR/compose.yaml" "$@"
+  }
+fi
+
 echo "==> installing"
 OUT="$(/tmp/inbuxa install --local --domain example.test --install-deps --yes 2>&1)"; rc=$?
 echo "$OUT" | grep -v '^    |' | tail -24 | sed 's/^/    /'
@@ -38,7 +52,7 @@ grep -q "_domainkey" "$DIR/dns.zone" && ok "and the DKIM key it generated" || ba
 
 echo
 echo "==> what it left running"
-STATE="$(docker compose -f $DIR/compose.yaml ps --format '{{.Service}} {{.State}}')"
+STATE="$(compose ps --format '{{.Service}} {{.State}}')"
 for s in server console webmail; do
   grep -q "^$s running" <<<"$STATE" && ok "$s is running" || { bad "$s is not running"; echo "$STATE" | sed 's/^/    /'; }
 done
@@ -52,7 +66,7 @@ curl -fsS http://127.0.0.1:8080/api/health 2>/dev/null | grep -q '"ok":true' && 
 
 echo
 echo "==> the bootstrap credential did not outlive the setup"
-ENVOUT="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$(docker compose -f $DIR/compose.yaml ps -q server)")"
+ENVOUT="$($RT inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$(compose ps -q server)")"
 grep -q "RECOVERY_ADMIN" <<<"$ENVOUT" && { bad "the server still carries a recovery admin"; echo "$ENVOUT" | grep RECOVERY | sed 's/^/    /'; } || ok "no recovery admin in the running server"
 grep -q "INBUXA_WEBMAIL_CLIENT_SECRET" <<<"$ENVOUT" && ok "the webmail's client secret is where it belongs" || bad "the server has no webmail client secret"
 
@@ -70,7 +84,7 @@ grep -q "urn:ietf:params:jmap:mail" /tmp/login.json && ok "and the session carri
 echo
 echo "==> running it again converges rather than duplicating"
 OUT="$(/tmp/inbuxa install --local --domain example.test --yes 2>&1)"; rc=$?
-COUNT=$(docker compose -f $DIR/compose.yaml ps --format '{{.Service}}' | sort -u | wc -l)
+COUNT=$(compose ps --format '{{.Service}}' | sort -u | wc -l)
 [ "$COUNT" = 3 ] && ok "still three services, not six" || bad "$COUNT services after a second run"
 
 echo

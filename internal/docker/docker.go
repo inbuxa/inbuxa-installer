@@ -16,11 +16,28 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
 )
 
 // Output runs docker with args and returns its standard output.
+// CLI is the runtime's own command: "docker", or "podman" where that is
+// what the machine has. Podman's CLI takes the same pull/create/cp/inspect
+// arguments these helpers use.
+var CLI = "docker"
+
+// UseRuntime points the package's helpers at whichever runtime the survey
+// found, before anything is run.
+func UseRuntime(r host.Runtime) {
+	if r.Kind == "podman" {
+		CLI = "podman"
+		return
+	}
+	CLI = "docker"
+}
+
 func Output(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd := exec.CommandContext(ctx, CLI, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -28,7 +45,7 @@ func Output(ctx context.Context, args ...string) (string, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("docker %s: %s", strings.Join(args, " "), msg)
+		return "", fmt.Errorf("%s %s: %s", CLI, strings.Join(args, " "), msg)
 	}
 	return strings.TrimSpace(stdout.String()), nil
 }
@@ -124,10 +141,38 @@ func ProjectLeftovers(ctx context.Context, project string) ([]string, error) {
 
 // Compose runs docker compose against one deployment directory.
 type Compose struct {
-	Dir   string
-	Files []string // extra -f files after compose.yaml, e.g. the bootstrap override
-	Env   []string // added to the environment compose interpolates from
-	Out   io.Writer
+	Dir     string
+	Files   []string // extra -f files after compose.yaml, e.g. the bootstrap override
+	Env     []string // added to the environment compose interpolates from
+	Out     io.Writer
+	Runtime host.Runtime // docker or podman; zero value means docker on PATH
+}
+
+// command is how compose is invoked here. With docker it is a subcommand of
+// the docker CLI; with podman there is no docker CLI at all, so the plugin
+// binary is run directly and pointed at podman's API socket. Compose speaks
+// the Docker API and podman serves it, so the same plugin and the same
+// compose file drive either -- which is why there is one deployment path and
+// not two.
+func (c Compose) command(ctx context.Context, args []string) *exec.Cmd {
+	if c.Runtime.Kind == "podman" {
+		cmd := exec.CommandContext(ctx, host.ComposePluginPath, args...)
+		socket := c.Runtime.Socket
+		if socket == "" {
+			socket = "/run/podman/podman.sock"
+		}
+		cmd.Env = append(os.Environ(), "DOCKER_HOST=unix://"+socket)
+		return cmd
+	}
+	return exec.CommandContext(ctx, "docker", append([]string{"compose"}, args...)...)
+}
+
+// name is what to call the thing in an error message.
+func (c Compose) name() string {
+	if c.Runtime.Kind == "podman" {
+		return "podman compose"
+	}
+	return "docker compose"
 }
 
 // Run runs a compose command with its output passed through: pulling images
@@ -135,7 +180,7 @@ type Compose struct {
 // is quiet, because without a terminal compose prints each container's every
 // state change twice and the tool already says what step it is on.
 func (c Compose) Run(ctx context.Context, args ...string) error {
-	full := []string{"compose", "--project-directory", c.Dir, "-f", c.Dir + "/compose.yaml"}
+	full := []string{"--project-directory", c.Dir, "-f", c.Dir + "/compose.yaml"}
 	if len(args) > 0 && args[0] != "pull" {
 		full = append(full, "--progress", "quiet")
 	}
@@ -143,18 +188,39 @@ func (c Compose) Run(ctx context.Context, args ...string) error {
 		full = append(full, "-f", f)
 	}
 	full = append(full, args...)
-	cmd := exec.CommandContext(ctx, "docker", full...)
-	cmd.Env = append(os.Environ(), c.Env...)
+	cmd := c.command(ctx, full)
+	cmd.Env = append(cmd.Env, c.Env...)
+	if cmd.Env == nil {
+		cmd.Env = append(os.Environ(), c.Env...)
+	}
 	cmd.Stdout, cmd.Stderr = c.Out, c.Out
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker compose %s: %w", strings.Join(args, " "), err)
+		return fmt.Errorf("%s %s: %w", c.name(), strings.Join(args, " "), err)
 	}
 	return nil
 }
 
+// Output runs a compose command and returns what it printed.
+func (c Compose) Output(ctx context.Context, args ...string) (string, error) {
+	cmd := c.command(ctx, args)
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("%s %s: %s", c.name(), strings.Join(args, " "), msg)
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
 // Running reports whether a service has a running container.
 func (c Compose) Running(ctx context.Context, service string) bool {
-	out, err := Output(ctx, "compose", "--project-directory", c.Dir, "-f", c.Dir+"/compose.yaml",
+	out, err := c.Output(ctx, "--project-directory", c.Dir, "-f", c.Dir+"/compose.yaml",
 		"ps", "--status", "running", "--services")
 	if err != nil {
 		return false
@@ -169,7 +235,7 @@ func (c Compose) Running(ctx context.Context, service string) bool {
 
 // Logs returns the last lines of one service's log, for a failure report.
 func (c Compose) Logs(ctx context.Context, service string, lines int) string {
-	out, err := Output(ctx, "compose", "--project-directory", c.Dir, "-f", c.Dir+"/compose.yaml",
+	out, err := c.Output(ctx, "--project-directory", c.Dir, "-f", c.Dir+"/compose.yaml",
 		"logs", "--no-color", "--tail", fmt.Sprint(lines), service)
 	if err != nil {
 		return err.Error()

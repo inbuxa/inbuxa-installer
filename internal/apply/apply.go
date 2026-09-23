@@ -30,6 +30,7 @@ import (
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/compose"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/deps"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/docker"
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/jmap"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/plan"
 )
@@ -70,7 +71,7 @@ type Log interface {
 
 // Run carries out p. It refuses anything but container shapes for now, and
 // says so rather than pretending a host install happened.
-func Run(ctx context.Context, p plan.Plan, log Log) (*Result, error) {
+func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, error) {
 	o := p.Options
 	for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
 		if o.Shape(c) == plan.Host {
@@ -86,6 +87,15 @@ func Run(ctx context.Context, p plan.Plan, log Log) (*Result, error) {
 		if err := deps.Resolve(ctx, log.Out(), p.Needs); err != nil {
 			return nil, err
 		}
+		// The survey was taken before any of that existed. Installing podman
+		// on a machine that had no runtime and then driving the deployment
+		// with the old facts meant reaching for a docker that was never
+		// going to be there.
+		f = host.Survey(ctx)
+		if !f.Runtime.Usable {
+			return nil, fmt.Errorf("after installing what was missing, containers still are not usable: %s", f.Runtime.Why)
+		}
+		log.Info("using %s %s", f.Runtime.Kind, f.Runtime.Version)
 	}
 
 	dir := o.Dir
@@ -165,7 +175,10 @@ func Run(ctx context.Context, p plan.Plan, log Log) (*Result, error) {
 	}
 	log.Info("compose.yaml, .env%s", map[bool]string{true: " and Caddyfile", false: ""}[stack.Proxy])
 
-	cmp := docker.Compose{Dir: dir}
+	// Whichever runtime the survey found: docker where there is one, podman
+	// on the Red Hat family, driven through the same compose plugin.
+	docker.UseRuntime(f.Runtime)
+	cmp := docker.Compose{Dir: dir, Runtime: f.Runtime}
 
 	log.Step("fetching the images")
 	if err := cmp.Run(ctx, "pull", "--quiet"); err != nil {

@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/apply"
@@ -60,6 +61,20 @@ deps flags:
 `
 
 func main() {
+	// The three programs are Linux services: systemd units, a container
+	// runtime, /etc and /var. This binary compiles for macOS and Windows
+	// because Go will compile it for anything, and on either it would read
+	// no /etc/os-release, find no systemd, and report a machine that does
+	// not exist. Saying so is the only honest thing it can do there.
+	if runtime.GOOS != "linux" {
+		fmt.Fprintf(os.Stderr,
+			"inbuxa installs on Linux, and this is %s.\n\n"+
+				"The mail server, the console and the webmail are Linux services. To try them\n"+
+				"on this machine, run them in containers with Docker or Podman Desktop; to\n"+
+				"install them, run this on the Linux machine that will host them.\n",
+			runtime.GOOS)
+		os.Exit(2)
+	}
 	if len(os.Args) < 2 {
 		// The interface is the no-argument case. Until it lands, say so
 		// plainly rather than pretending: a half-built screen is worse than
@@ -145,7 +160,7 @@ func install(args []string) int {
 
 	fmt.Println("\nApplying:")
 	log := &printer{}
-	res, err := apply.Run(context.Background(), p, log)
+	res, err := apply.Run(context.Background(), p, f, log)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
 		return 1
@@ -285,14 +300,26 @@ func render(f host.Facts) string {
 		fmt.Fprintf(&b, "  %-22s %d GB free\n", "disk", f.DiskFreeGB)
 	}
 
-	docker := "not installed"
+	runtime := "none: neither docker nor podman is installed"
 	switch {
-	case f.Docker.Usable:
-		docker = "usable, server " + f.Docker.Version + ", compose " + f.Docker.Compose
-	case f.Docker.Present:
-		docker = "installed but not usable: " + f.Docker.Why
+	case f.Runtime.Usable:
+		runtime = f.Runtime.Kind + " " + f.Runtime.Version + ", compose " + f.Runtime.Compose
+		if f.Runtime.Socket != "" {
+			runtime += ", at " + f.Runtime.Socket
+		}
+	case f.Runtime.Present:
+		runtime = f.Runtime.Kind + " installed but not usable: " + f.Runtime.Why
 	}
-	fmt.Fprintf(&b, "  %-22s %s\n", "docker", docker)
+	fmt.Fprintf(&b, "  %-22s %s\n", "container runtime", runtime)
+
+	glibc := "could not be read"
+	if f.Glibc.Version != "" {
+		glibc = f.Glibc.Version
+		if !f.Glibc.AtLeast(plan.ServerGlibcMajor, plan.ServerGlibcMinor) {
+			glibc += fmt.Sprintf(" (older than the %d.%d the server binary needs)", plan.ServerGlibcMajor, plan.ServerGlibcMinor)
+		}
+	}
+	fmt.Fprintf(&b, "  %-22s %s\n", "glibc", glibc)
 
 	node := "not installed"
 	switch {

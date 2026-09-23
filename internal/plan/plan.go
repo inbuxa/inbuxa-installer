@@ -114,27 +114,55 @@ type Availability struct {
 	Why string
 }
 
-// Available answers for one cell of the matrix.
+// ServerGlibc is the C library the published server binary is linked
+// against. It is built in a current Debian, so a host install of the server
+// needs a distribution at least this new -- Debian 13, Ubuntu 24.04, Fedora
+// 40 and Arch all are; Rocky 9, Debian 12 and Ubuntu 22.04 are not, and on
+// those the container shape is the answer rather than a binary that cannot
+// start.
+const (
+	ServerGlibcMajor = 2
+	ServerGlibcMinor = 39
+)
+
+// Available answers for one cell of the matrix: can this machine, as it is,
+// deliver this component in this shape? Everything the interface offers and
+// everything a flag will accept comes through here, so an offer is never
+// made that the machine cannot keep.
 func Available(f host.Facts, c Component, s Shape) Availability {
 	switch s {
 	case Skip:
 		return Availability{OK: true}
+
 	case Container:
-		if !f.Docker.Present {
-			return Availability{Why: "docker is not installed"}
+		if !f.Runtime.Present {
+			return Availability{Why: "no container runtime: neither docker nor podman is installed"}
 		}
-		if !f.Docker.Usable {
-			return Availability{Why: f.Docker.Why}
+		if !f.Runtime.Usable {
+			return Availability{Why: f.Runtime.Why}
 		}
 		return Availability{OK: true}
+
 	case Host:
 		if !f.Systemd {
 			return Availability{Why: "a host install needs systemd, which is not running this machine"}
 		}
 		switch c {
 		case Server:
+			// The binary is downloaded, not built here, so the machine has
+			// to be able to run it.
+			if f.Glibc.Version == "" {
+				return Availability{Why: "this machine's C library could not be read, and the server binary is linked against glibc " +
+					fmt.Sprintf("%d.%d", ServerGlibcMajor, ServerGlibcMinor)}
+			}
+			if !f.Glibc.AtLeast(ServerGlibcMajor, ServerGlibcMinor) {
+				return Availability{Why: fmt.Sprintf(
+					"the server binary needs glibc %d.%d or newer and this machine has %s; run the server as a container here",
+					ServerGlibcMajor, ServerGlibcMinor, f.Glibc.Version)}
+			}
 			return Availability{OK: true}
 		case Console:
+			// Static files behind whatever serves them: nothing to run.
 			return Availability{OK: true}
 		case Webmail:
 			if !f.Node.Present {

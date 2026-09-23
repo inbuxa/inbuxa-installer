@@ -5,11 +5,13 @@
 # Stop the lab machine and remove its disks. The base image stays, so up.sh
 # is quick the next time; --all takes that too.
 set -euo pipefail
-LAB="${LAB:-$HOME/.cache/inbuxa-lab}"
-SSH_PORT="${SSH_PORT:-2222}"
+. "$(dirname "$0")/lib.sh"
+
+DISTRO="${DISTRO:-debian13}"
+LAB="${LAB:-$HOME/.cache/inbuxa-lab/$DISTRO}"
+SSH_PORT="${SSH_PORT:-$(distro_port "$DISTRO")}"
 DISK="$LAB/lab.qcow2"; CLEAN="$LAB/lab-clean.qcow2"; SEED="$LAB/seed.iso"
 LOG="$LAB/console.log"; PIDFILE="$LAB/qemu.pid"
-. "$(dirname "$0")/lib.sh"
 
 vm_stop
 rm -f "$DISK" "$CLEAN" "$SEED" "$PIDFILE" "$LAB/monitor.sock"

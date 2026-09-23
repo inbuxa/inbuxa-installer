@@ -80,18 +80,7 @@ type step struct {
 func For(f host.Facts, wantContainers, wantHostWebmail bool) []Need {
 	var needs []Need
 	if wantContainers {
-		switch {
-		case !f.Docker.Present:
-			needs = append(needs, dockerNeed(f), composeNeed(f))
-		case !f.Docker.Usable && strings.Contains(f.Docker.Why, "compose"):
-			needs = append(needs, composeNeed(f))
-		case !f.Docker.Usable:
-			needs = append(needs, Need{
-				Name:    "docker",
-				Because: "a container install",
-				Why:     f.Docker.Why + " -- that is not something this installer should fix for you",
-			})
-		}
+		needs = append(needs, runtimeNeeds(f)...)
 	}
 	if wantHostWebmail && (!f.Node.Present || f.Node.Major < 22) {
 		needs = append(needs, nodeNeed(f))
@@ -105,11 +94,84 @@ func For(f host.Facts, wantContainers, wantHostWebmail bool) []Need {
 	return out
 }
 
+// runtimeNeeds is what this machine is missing before it can run containers.
+//
+// Which runtime depends on the distribution, and that is the whole point:
+// Debian and Arch ship Docker, and the Red Hat family ships podman and no
+// Docker at all. Telling a Fedora or Rocky operator to add Docker's own
+// repository -- a new source and a new signing key -- to a machine that
+// already has a working container runtime would be the wrong trade. Compose
+// speaks the Docker API and podman serves it, so one compose file and one
+// plugin drive either.
+func runtimeNeeds(f host.Facts) []Need {
+	if f.Runtime.Usable {
+		return nil
+	}
+	switch {
+	// Something is installed and broken in a way that is not ours to fix.
+	case f.Runtime.Present && f.Runtime.Compose != "":
+		return []Need{{
+			Name:    f.Runtime.Kind,
+			Because: "a container install",
+			Why:     f.Runtime.Why + " -- that is not something this installer should fix for you",
+		}}
+	case f.Runtime.Kind == "podman":
+		// Podman is here; what is missing is its API socket, the compose
+		// plugin, or both.
+		var needs []Need
+		if strings.Contains(f.Runtime.Why, "socket") {
+			needs = append(needs, podmanSocketNeed())
+		}
+		if strings.Contains(f.Runtime.Why, "compose") || len(needs) == 0 {
+			needs = append(needs, composeNeed(f))
+		}
+		return needs
+	case f.OS.Family == "rhel":
+		// No runtime at all, on a distribution whose own is podman.
+		return []Need{podmanNeed(f), podmanSocketNeed(), composeNeed(f)}
+	case !f.Runtime.Present:
+		return []Need{dockerNeed(f), composeNeed(f)}
+	default:
+		return []Need{{
+			Name:    "docker",
+			Because: "a container install",
+			Why:     f.Runtime.Why + " -- that is not something this installer should fix for you",
+		}}
+	}
+}
+
+func podmanNeed(f host.Facts) Need {
+	n := Need{Name: "podman", Because: "a container install"}
+	pkg, install := packageInstall(f.OS.Family, "podman")
+	if install == nil {
+		n.Why = "this installer does not know how to install podman on " + describeOS(f.OS)
+		return n
+	}
+	n.Fixable = true
+	n.Actions = []string{fmt.Sprintf("install %s from the distribution's own archive", pkg)}
+	n.steps = []step{{"installing " + pkg, install}}
+	return n
+}
+
+// podmanSocketNeed turns on the API socket compose talks to. Podman works
+// perfectly well without it; compose does not.
+func podmanSocketNeed() Need {
+	return Need{
+		Name:    "podman socket",
+		Because: "compose, which speaks the Docker API that this socket serves",
+		Fixable: true,
+		Actions: []string{"enable and start podman.socket, which serves the API at /run/podman/podman.sock"},
+		steps: []step{{"starting podman.socket", func(ctx context.Context, log io.Writer) error {
+			return run(ctx, log, "systemctl", "enable", "--now", "podman.socket")
+		}}},
+	}
+}
+
 func dockerNeed(f host.Facts) Need {
 	n := Need{Name: "docker", Because: "a container install"}
 	pkg, install := packageInstall(f.OS.Family, dockerPackage(f.OS.Family))
 	if install == nil {
-		n.Why = "this installer does not know how to install Docker on " + describeOS(f.OS)
+		n.Why = "this installer does not know how to install a container runtime on " + describeOS(f.OS)
 		return n
 	}
 	n.Fixable = true
@@ -126,6 +188,8 @@ func dockerNeed(f host.Facts) Need {
 	return n
 }
 
+// composeNeed is the same plugin whichever runtime is underneath: compose
+// speaks the Docker API, and podman serves it.
 func composeNeed(f host.Facts) Need {
 	arch := goarch()
 	sum, ok := composeSHA[arch]
@@ -136,15 +200,14 @@ func composeNeed(f host.Facts) Need {
 	}
 	url := fmt.Sprintf("https://github.com/docker/compose/releases/download/%s/docker-compose-linux-%s",
 		composeVersion, archName(arch))
-	dest := "/usr/local/lib/docker/cli-plugins/docker-compose"
 	n.Fixable = true
 	n.Actions = []string{
 		fmt.Sprintf("fetch the Compose plugin %s (%s) and check it against its pinned checksum", composeVersion, arch),
-		"put it at " + dest,
+		"put it at " + host.ComposePluginPath,
 	}
 	n.steps = []step{
 		{"fetching compose " + composeVersion, func(ctx context.Context, log io.Writer) error {
-			return fetchVerified(ctx, log, url, sum, dest, 0o755)
+			return fetchVerified(ctx, log, url, sum, host.ComposePluginPath, 0o755)
 		}},
 	}
 	return n
@@ -185,11 +248,11 @@ func dockerPackage(family string) string {
 		return "docker.io"
 	case "arch":
 		return "docker"
-	case "rhel":
-		return "docker"
 	case "suse":
 		return "docker"
 	}
+	// The Red Hat family is deliberately absent: its distributions ship
+	// podman, not Docker, and runtimeNeeds sends them there.
 	return ""
 }
 

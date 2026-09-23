@@ -12,11 +12,13 @@
 set -euo pipefail
 CASE="${1:?usage: run.sh e2e/cases/<case>.sh}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-LAB="${LAB:-$HOME/.cache/inbuxa-lab}"
-MEM="${MEM:-4096}"; VCPUS="${VCPUS:-2}"; SSH_PORT="${SSH_PORT:-2222}"
+. "$(dirname "$0")/lib.sh"
+
+DISTRO="${DISTRO:-debian13}"
+LAB="${LAB:-$HOME/.cache/inbuxa-lab/$DISTRO}"
+MEM="${MEM:-4096}"; VCPUS="${VCPUS:-2}"; SSH_PORT="${SSH_PORT:-$(distro_port "$DISTRO")}"
 DISK="$LAB/lab.qcow2"; CLEAN="$LAB/lab-clean.qcow2"; SEED="$LAB/seed.iso"
 LOG="$LAB/console.log"; PIDFILE="$LAB/qemu.pid"
-. "$(dirname "$0")/lib.sh"
 
 [ -f "$ROOT/$CASE" ] || { echo "no such case: $CASE" >&2; exit 1; }
 [ "${KEEP:-}" = 1 ] || "$(dirname "$0")/reset.sh"

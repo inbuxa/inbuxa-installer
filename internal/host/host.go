@@ -32,12 +32,13 @@ import (
 // anybody anything.
 type Facts struct {
 	OS         OSInfo
-	Root       bool   // running as uid 0
-	Systemd    bool   // systemd is pid 1
-	Docker     Docker //
-	Node       Node   //
-	Ports      []Port // the ports the suite wants, and who holds them
-	DiskFreeGB int    // on the filesystem that would hold the install
+	Root       bool    // running as uid 0
+	Systemd    bool    // systemd is pid 1
+	Runtime    Runtime // docker or podman, whichever this machine can use
+	Node       Node    //
+	Glibc      Glibc   // what a downloaded binary has to be able to run against
+	Ports      []Port  // the ports the suite wants, and who holds them
+	DiskFreeGB int     // on the filesystem that would hold the install
 	MemoryMB   int
 	Existing   string // path of a previous install's state file, or ""
 }
@@ -50,13 +51,42 @@ type OSInfo struct {
 	Family    string // "debian", "rhel", "arch", "suse", "" when unknown
 }
 
-// Docker is whether containers are a real option for this user.
-type Docker struct {
-	Present bool
-	Usable  bool   // the daemon answers *as this user*, which is the part that matters
-	Version string //
-	Compose string // "v2" when `docker compose` works, "" otherwise
+// Runtime is whether containers are a real option for this user, and with
+// what. Docker and podman are both first-class: podman is what the Red Hat
+// family ships, and refusing to see it would mean telling a Fedora or Rocky
+// operator to install Docker from a third-party repository on a machine that
+// already has a container runtime.
+type Runtime struct {
+	Kind    string // "docker", "podman", or "" when neither can be used
+	Present bool   // one of them is installed, whether or not it works
+	Usable  bool   // it answers *as this user*, which is the part that matters
+	Version string
+	Compose string // "v2" when compose works, "" otherwise
+	Socket  string // for podman, the API socket compose is pointed at
 	Why     string // why it is unusable, in a sentence fit to show someone
+
+	// What is missing, named rather than described, so the caller does not
+	// have to read Why to decide what to do. Reporting only the first thing
+	// in the way meant fixing one of them and being told about the next.
+	NeedsSocket  bool
+	NeedsCompose bool
+}
+
+// Glibc is the C library a downloaded binary is linked against. The release
+// binaries are built in a current Debian, and a host install on an older
+// distribution would put a binary on the machine that cannot start.
+type Glibc struct {
+	Version string // "2.39"
+	Major   int
+	Minor   int
+}
+
+// AtLeast answers whether this glibc is new enough for a given version.
+func (g Glibc) AtLeast(major, minor int) bool {
+	if g.Major != major {
+		return g.Major > major
+	}
+	return g.Minor >= minor
 }
 
 // Node is what a host install of the webmail would run on.
@@ -106,8 +136,9 @@ func Survey(ctx context.Context) Facts {
 	f := Facts{
 		OS:       readOSRelease("/etc/os-release"),
 		Systemd:  isSystemd(),
-		Docker:   surveyDocker(ctx),
+		Runtime:  surveyRuntime(ctx),
 		Node:     surveyNode(ctx),
+		Glibc:    surveyGlibc(ctx),
 		MemoryMB: memoryMB(),
 	}
 	if u, err := user.Current(); err == nil {
@@ -166,14 +197,37 @@ func isSystemd() bool {
 	return err == nil && st.IsDir()
 }
 
-func surveyDocker(ctx context.Context) Docker {
-	var d Docker
-	bin, err := exec.LookPath("docker")
-	if err != nil {
-		d.Why = "docker is not installed"
+// surveyRuntime looks for docker first and podman second, and reports the
+// one that actually answers. Preferring docker where both exist keeps a
+// machine that has been set up for docker working the way its operator
+// expects; podman is what the Red Hat family ships, and is no less
+// first-class for being second in the list.
+func surveyRuntime(ctx context.Context) Runtime {
+	if r := surveyDocker(ctx); r.Usable {
+		return r
+	} else if d := r; d.Present {
+		// Docker is installed but broken. Podman may still be here and
+		// working, and saying so is more use than reporting the broken one.
+		if p := surveyPodman(ctx); p.Usable {
+			return p
+		}
 		return d
 	}
-	d.Present = true
+	if p := surveyPodman(ctx); p.Present {
+		return p
+	}
+	return Runtime{Why: "neither docker nor podman is installed"}
+}
+
+func surveyDocker(ctx context.Context) Runtime {
+	r := Runtime{Kind: "docker"}
+	bin, err := exec.LookPath("docker")
+	if err != nil {
+		r.Kind = ""
+		r.Why = "docker is not installed"
+		return r
+	}
+	r.Present = true
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -182,22 +236,109 @@ func surveyDocker(ctx context.Context) Docker {
 	// answers the question that matters: can *this user* run containers?
 	out, err := exec.CommandContext(ctx, bin, "version", "--format", "{{.Server.Version}}").CombinedOutput()
 	if err != nil {
-		d.Why = firstLine(string(out))
-		if d.Why == "" {
-			d.Why = "the docker daemon did not answer"
+		r.Why = firstLine(string(out))
+		if r.Why == "" {
+			r.Why = "the docker daemon did not answer"
 		}
-		return d
+		return r
 	}
-	d.Usable = true
-	d.Version = strings.TrimSpace(string(out))
+	r.Usable = true
+	r.Version = strings.TrimSpace(string(out))
 
 	if err := exec.CommandContext(ctx, bin, "compose", "version").Run(); err == nil {
-		d.Compose = "v2"
+		r.Compose = "v2"
 	} else {
-		d.Usable = false
-		d.Why = "docker compose (v2) is not available"
+		r.Usable = false
+		r.NeedsCompose = true
+		r.Why = "docker compose (v2) is not available"
 	}
-	return d
+	return r
+}
+
+// surveyPodman reports podman and the API socket compose can be pointed at.
+// Compose speaks the Docker API, and podman serves it, so the same compose
+// plugin drives either -- which is why this installer does not carry two
+// deployment paths for one compose file.
+func surveyPodman(ctx context.Context) Runtime {
+	r := Runtime{Kind: "podman"}
+	bin, err := exec.LookPath("podman")
+	if err != nil {
+		r.Kind = ""
+		r.Why = "podman is not installed"
+		return r
+	}
+	r.Present = true
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, bin, "version", "--format", "{{.Version}}").CombinedOutput()
+	if err != nil {
+		r.Why = firstLine(string(out))
+		if r.Why == "" {
+			r.Why = "podman did not answer"
+		}
+		return r
+	}
+	r.Version = strings.TrimSpace(string(out))
+
+	// Two things make compose work here, and both are checked before
+	// reporting: the API socket podman.socket serves, which is not running
+	// on a fresh machine, and the compose plugin itself.
+	for _, path := range []string{"/run/podman/podman.sock"} {
+		if st, err := os.Stat(path); err == nil && st.Mode()&os.ModeSocket != 0 {
+			r.Socket = path
+		}
+	}
+	r.NeedsSocket = r.Socket == ""
+	if _, err := os.Stat(ComposePluginPath); err == nil {
+		r.Compose = "v2"
+	} else {
+		r.NeedsCompose = true
+	}
+	switch {
+	case r.NeedsSocket && r.NeedsCompose:
+		r.Why = "podman's API socket is not running (podman.socket), and the compose plugin is not installed"
+	case r.NeedsSocket:
+		r.Why = "podman's API socket is not running (podman.socket)"
+	case r.NeedsCompose:
+		r.Why = "the compose plugin is not installed"
+	default:
+		r.Usable = true
+	}
+	return r
+}
+
+// ComposePluginPath is where this installer puts the compose plugin, and
+// where it looks for one it put there before. The same file serves docker
+// and podman.
+const ComposePluginPath = "/usr/local/lib/docker/cli-plugins/docker-compose"
+
+// surveyGlibc reads the C library's version, which decides whether a
+// downloaded binary can run here at all. The release binaries are built in a
+// current Debian; an older distribution can host containers perfectly well
+// and still be unable to start that file.
+func surveyGlibc(ctx context.Context) Glibc {
+	var g Glibc
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// getconf is in glibc itself; ldd --version is the fallback for a
+	// machine where it is missing.
+	out, err := exec.CommandContext(ctx, "getconf", "GNU_LIBC_VERSION").Output()
+	if err != nil || len(out) == 0 {
+		out, err = exec.CommandContext(ctx, "ldd", "--version").Output()
+		if err != nil {
+			return g
+		}
+	}
+	m := regexp.MustCompile(`([0-9]+)\.([0-9]+)`).FindStringSubmatch(firstLine(string(out)))
+	if m == nil {
+		return g
+	}
+	g.Major, _ = strconv.Atoi(m[1])
+	g.Minor, _ = strconv.Atoi(m[2])
+	g.Version = m[1] + "." + m[2]
+	return g
 }
 
 var nodeVersion = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)`)

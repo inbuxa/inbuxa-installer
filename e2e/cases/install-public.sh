@@ -26,6 +26,20 @@ MAIL=mx.lab.test          # not "mail": proves the names follow --mail-host
 CONSOLE=console.lab.test
 WEBMAIL=webmail.lab.test
 DIR=/var/lib/inbuxa
+
+# Whichever runtime this machine has. The installer picks docker where there
+# is one and podman on the Red Hat family; a case that says "docker" only
+# tests half the distributions it is run on.
+if command -v docker >/dev/null 2>&1; then
+  RT=docker
+  compose() { docker compose -f "$DIR/compose.yaml" "$@"; }
+else
+  RT=podman
+  compose() {
+    DOCKER_HOST=unix:///run/podman/podman.sock \
+      /usr/local/lib/docker/cli-plugins/docker-compose -f "$DIR/compose.yaml" "$@"
+  }
+fi
 WORK=/tmp/lab
 LABNET=inbuxa-e2e
 LABSUBNET=172.31.254.0/24
@@ -35,7 +49,7 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 
 echo "==> what the installer needs, before the lab"
 /tmp/inbuxa deps --console container --webmail container --install >/dev/null 2>&1 || true
-docker version >/dev/null 2>&1 && ok "docker is usable" || { bad "no docker"; exit 1; }
+{ docker version >/dev/null 2>&1 || podman version >/dev/null 2>&1; } && ok "a container runtime is usable" || { bad "no docker"; exit 1; }
 
 echo
 echo "==> standing up a private CA and a DNS stub"
@@ -145,7 +159,7 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$WORK/chain.pem" --resol
 
 echo
 echo "==> and nothing was left behind that should not be"
-ENVOUT="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$(docker compose -f $DIR/compose.yaml ps -q server)")"
+ENVOUT="$($RT inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$(compose ps -q server)")"
 grep -q "RECOVERY_ADMIN" <<<"$ENVOUT" && bad "the server still carries a recovery admin" || ok "no recovery admin on the server"
 
 echo
