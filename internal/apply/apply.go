@@ -48,15 +48,16 @@ const (
 
 // Result is what the operator is left holding.
 type Result struct {
-	Dir        string
-	AdminUser  string
-	AdminPass  string
-	FirstUser  string
-	FirstPass  string
-	ZoneFile   string
-	ConsoleURL string
-	WebmailURL string
-	ServerURL  string
+	Dir         string
+	AdminUser   string
+	AdminPass   string
+	FirstUser   string
+	FirstPass   string
+	ZoneFile    string
+	Certificate string // what issued the mail server's certificate, when one arrived
+	ConsoleURL  string
+	WebmailURL  string
+	ServerURL   string
 }
 
 // Log is how apply reports progress. The interface will draw ticks from it;
@@ -129,6 +130,34 @@ func Run(ctx context.Context, p plan.Plan, log Log) (*Result, error) {
 			stack.WebmailURL = "https://" + o.WebmailHost
 		}
 	}
+
+	// A private ACME CA has to be trusted by two programs that never see each
+	// other's trust store: the mail server, which asks for its own
+	// certificate over HTTP-01, and Caddy, which asks for the front ends'.
+	// The server gets the image's own roots plus this one as a file it mounts
+	// over its bundle; Caddy gets the root on its own.
+	if o.ACMECARoot != "" {
+		root, err := os.ReadFile(o.ACMECARoot)
+		if err != nil {
+			return nil, fmt.Errorf("reading the ACME CA root: %w", err)
+		}
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return nil, err
+		}
+		bundle, err := docker.SystemCABundle(ctx, stack.ServerImage)
+		if err != nil {
+			return nil, fmt.Errorf("reading the server image's CA bundle: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "ca-bundle.crt"), append(bundle, root...), 0o644); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "acme-ca-root.pem"), root, 0o644); err != nil {
+			return nil, err
+		}
+		stack.CABundle = true
+		stack.ACMECARoot = "acme-ca-root.pem"
+	}
+	stack.ACMEDirectory = o.ACMEDirectory
 
 	log.Step("writing the deployment into %s", dir)
 	if _, err := compose.Write(dir, &stack); err != nil {
@@ -246,8 +275,20 @@ func Run(ctx context.Context, p plan.Plan, log Log) (*Result, error) {
 
 	if !o.Local {
 		log.Step("turning on certificates")
-		if _, err := srv.EnableACME(ctx, domainID, "", o.ACMEEmail); err != nil {
+		if _, err := srv.EnableACME(ctx, domainID, o.ACMEDirectory, o.ACMEEmail); err != nil {
 			return res, fmt.Errorf("enabling ACME: %w", err)
+		}
+		// An order that fails is not retried on its own, and a restart does
+		// not start a new one: moving the domain to manual and back is what
+		// does. So this waits, and asks again every so often, rather than
+		// declaring the install finished over a self-signed certificate that
+		// every mail client will refuse.
+		if issuer := waitForCertificate(ctx, srv, log, domainID, o.MailHost, 3*time.Minute); issuer != "" {
+			res.Certificate = issuer
+			log.Info("certificate for %s issued by %s", o.MailHost, issuer)
+		} else {
+			log.Info("no certificate yet for %s: the server keeps trying, and will succeed once %s resolves to this machine and port 80 reaches it",
+				o.MailHost, o.MailHost)
 		}
 	}
 
@@ -274,6 +315,36 @@ func Run(ctx context.Context, p plan.Plan, log Log) (*Result, error) {
 		log.Info("the records this domain needs are in %s", res.ZoneFile)
 	}
 	return res, nil
+}
+
+// waitForCertificate waits for the mail server's own certificate to arrive,
+// asking for a fresh order every 45 seconds. It returns the issuer, or ""
+// when none arrived in time -- which is not a failure: on a real install the
+// domain often does not point here yet, and the server goes on trying.
+func waitForCertificate(ctx context.Context, srv *jmap.Client, log Log, domainID, host string, limit time.Duration) string {
+	deadline := time.Now().Add(limit)
+	nextRetry := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		certs, err := srv.Certificates(ctx)
+		if err == nil {
+			for _, c := range certs {
+				if c.SubjectAlternativeNames[host] && !strings.Contains(c.Issuer, "self signed") {
+					return c.Issuer
+				}
+			}
+		}
+		if time.Now().After(nextRetry) {
+			log.Info("asking for the certificate again")
+			_ = srv.RetryCertificates(ctx, domainID)
+			nextRetry = time.Now().Add(45 * time.Second)
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return ""
 }
 
 // Verify is the last step: does what was installed actually answer?

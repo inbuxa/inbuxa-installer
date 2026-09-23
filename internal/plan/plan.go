@@ -61,6 +61,12 @@ type Options struct {
 	Proxy       string // "caddy", "snippets", "none"
 	Choices     []Choice
 	InstallDeps bool // resolve what is missing rather than refusing over it
+
+	// A private ACME CA, for testing the certificate path without asking a
+	// public CA for certificates for names that are not ours. Empty means
+	// Let's Encrypt, which is what an install should use.
+	ACMEDirectory string
+	ACMECARoot    string
 }
 
 // Shape returns what was chosen for a component.

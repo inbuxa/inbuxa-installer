@@ -43,7 +43,10 @@ the installer draft); the phases are there too.
     inbuxa install --local --domain example.test --install-deps --yes
 
 is the shortest thing that works today: the whole suite on loopback, with no
-DNS and no certificates, on a machine that starts with nothing.
+DNS and no certificates, on a machine that starts with nothing. Without
+`--local` it takes the real ports, puts Caddy in front and obtains
+certificates -- which `e2e/cases/install-public.sh` proves against a private
+CA, with no internet and no public name involved.
 
 ## Building and testing
 
@@ -55,7 +58,8 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/up.sh                              a Debian 13 machine, in qemu, as you
     e2e/vm/run.sh e2e/cases/survey.sh         what it says about a machine
     e2e/vm/run.sh e2e/cases/deps.sh           the offer, and taking it
-    e2e/vm/run.sh e2e/cases/install-local.sh  a whole suite, and signing in to it
+    e2e/vm/run.sh e2e/cases/install-local.sh   a whole suite, and signing in to it
+    e2e/vm/run.sh e2e/cases/install-public.sh  the same with real ports and certificates
     e2e/vm/down.sh                            remove it
 
 Each case starts from a copy of the machine taken when it was new, so a run

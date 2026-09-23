@@ -46,6 +46,9 @@ install flags:
   --proxy WHICH              caddy | snippets | none   (default: caddy)
   --dir PATH                 where the installation lives; default: /var/lib/inbuxa
   --local                    loopback evaluation: no public ports, no certificates
+  --acme-directory URL       a private ACME CA, for testing the certificate path
+  --acme-ca-root PATH        that CA's root, which both the server and the proxy
+                             are made to trust
   --install-deps             install what the chosen shapes need and this
                              machine lacks, rather than refusing over it
   --dry-run                  print the plan and stop
@@ -107,6 +110,8 @@ func install(args []string) int {
 	fs.StringVar(&o.Dir, "dir", "", "")
 	fs.BoolVar(&o.Local, "local", false, "")
 	fs.BoolVar(&o.InstallDeps, "install-deps", false, "")
+	fs.StringVar(&o.ACMEDirectory, "acme-directory", "", "")
+	fs.StringVar(&o.ACMECARoot, "acme-ca-root", "", "")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -163,6 +168,9 @@ func install(args []string) int {
 	}
 	if res.WebmailURL != "" {
 		fmt.Printf("  webmail        %s\n", res.WebmailURL)
+	}
+	if res.Certificate != "" {
+		fmt.Printf("  certificate    issued by %s\n", res.Certificate)
 	}
 	if res.ZoneFile != "" {
 		fmt.Printf("  dns records    %s\n", res.ZoneFile)

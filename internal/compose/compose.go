@@ -71,10 +71,17 @@ type Stack struct {
 	CABundle      bool
 }
 
-// ServerNames is every name the server's certificate and the proxy need.
+// ServerNames is every name the server's certificate and the proxy need:
+// the mail host, and the four service names the server puts in its own
+// certificate by default.
+//
+// The list has to match what the server asks for exactly. Leaving
+// ua-auto-config out of the proxy meant its HTTP-01 challenge was not
+// forwarded, the whole order failed on that one name, and the mail ports
+// served a self-signed certificate while every other name validated.
 func (s Stack) ServerNames() []string {
 	names := []string{s.MailHost}
-	for _, n := range []string{"autoconfig", "autodiscover", "mta-sts"} {
+	for _, n := range []string{"autoconfig", "autodiscover", "mta-sts", "ua-auto-config"} {
 		names = append(names, n+"."+s.Domain)
 	}
 	return names
