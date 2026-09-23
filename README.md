@@ -22,6 +22,12 @@ This is early. What is built:
 - **`install --dry-run`** -- the whole plan: every file, unit, container,
   port, DNS record and credential, and a refusal with a reason when the
   machine cannot carry out what was asked.
+- **`deps`** -- what a shape needs that this machine has not got, and, with
+  `--install`, the doing of it: the Docker daemon from the distribution's own
+  archive, the Compose plugin and Node from their official builds, both
+  pinned by version and checked against a checksum in the source before
+  anything is put in place. `install --install-deps` does the same as part of
+  a run. A missing dependency is an offer, not a refusal.
 
 Not built yet: applying the plan, the terminal interface, `join`, `status`,
 `upgrade`, `uninstall`. The design is in the inbuxa specification (§6.1 and

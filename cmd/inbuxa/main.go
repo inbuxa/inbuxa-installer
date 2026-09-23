@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/deps"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/plan"
 )
@@ -27,6 +28,7 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
 
   inbuxa install [flags]     install or converge (no flags: the interface)
   inbuxa survey              what this machine is, as the installer sees it
+  inbuxa deps [--install]    what is missing for a shape, and fix it
   inbuxa version             this program's version
 
 install flags:
@@ -41,8 +43,14 @@ install flags:
   --proxy WHICH              caddy | snippets | none   (default: caddy)
   --dir PATH                 where the installation lives; default: /var/lib/inbuxa
   --local                    loopback evaluation: no public ports, no certificates
+  --install-deps             install what the chosen shapes need and this
+                             machine lacks, rather than refusing over it
   --dry-run                  print the plan and stop
   --yes                      do not ask for confirmation
+
+deps flags:
+  --server/--console/--webmail SHAPE   the shapes to work out the needs for
+  --install                  do it, rather than only saying what it would do
 `
 
 func main() {
@@ -58,6 +66,8 @@ func main() {
 		os.Exit(install(os.Args[2:]))
 	case "survey":
 		os.Exit(survey())
+	case "deps":
+		os.Exit(depsCmd(os.Args[2:]))
 	case "version":
 		fmt.Println(version)
 	case "-h", "--help", "help":
@@ -93,6 +103,7 @@ func install(args []string) int {
 	fs.StringVar(&o.Proxy, "proxy", "", "")
 	fs.StringVar(&o.Dir, "dir", "", "")
 	fs.BoolVar(&o.Local, "local", false, "")
+	fs.BoolVar(&o.InstallDeps, "install-deps", false, "")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -125,6 +136,71 @@ func install(args []string) int {
 	}
 	fmt.Fprintln(os.Stderr, "\napply is not built yet")
 	return 1
+}
+
+// depsCmd is the offer on its own: what the chosen shapes need that this
+// machine does not have, and -- with --install -- the doing of it. It exists
+// separately from install because an operator preparing a machine should be
+// able to get it ready without being asked for a domain first.
+func depsCmd(args []string) int {
+	fs := flag.NewFlagSet("deps", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	var (
+		server  = fs.String("server", "container", "")
+		console = fs.String("console", "container", "")
+		webmail = fs.String("webmail", "container", "")
+		doIt    = fs.Bool("install", false, "")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	wantContainers, wantHostWebmail := false, false
+	for _, c := range []struct {
+		comp plan.Component
+		val  string
+	}{{plan.Server, *server}, {plan.Console, *console}, {plan.Webmail, *webmail}} {
+		sh, err := shape(c.val)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "--%s: %v\n", c.comp, err)
+			return 2
+		}
+		if sh == plan.Container {
+			wantContainers = true
+		}
+		if sh == plan.Host && c.comp == plan.Webmail {
+			wantHostWebmail = true
+		}
+	}
+
+	ctx := context.Background()
+	f := host.Survey(ctx)
+	needs := deps.For(f, wantContainers, wantHostWebmail)
+	if len(needs) == 0 {
+		fmt.Println("Nothing is missing for those shapes.")
+		return 0
+	}
+	fmt.Println("Missing, for the shapes asked about:")
+	fmt.Print(deps.Describe(needs))
+	if !deps.Fixable(needs) {
+		return 1
+	}
+	if !*doIt {
+		fmt.Println("\nPass --install to do it.")
+		return 0
+	}
+	if !f.Root {
+		fmt.Fprintln(os.Stderr, "\ninstalling this needs root")
+		return 1
+	}
+	fmt.Println("\nInstalling:")
+	if err := deps.Resolve(ctx, os.Stdout, needs); err != nil {
+		fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
+		return 1
+	}
+	after := host.Survey(ctx)
+	fmt.Println("\nNow:")
+	fmt.Print(render(after))
+	return 0
 }
 
 func shape(s string) (plan.Shape, error) {
@@ -170,7 +246,7 @@ func render(f host.Facts) string {
 	node := "not installed"
 	switch {
 	case f.Node.Present && f.Node.Major >= 22:
-		node = f.Node.Version
+		node = f.Node.Version + " at " + f.Node.Path
 	case f.Node.Present:
 		node = f.Node.Version + " (too old for a host install of the webmail)"
 	}

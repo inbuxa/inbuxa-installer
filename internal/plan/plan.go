@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/deps"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
 )
 
@@ -59,6 +60,7 @@ type Options struct {
 	Dir         string
 	Proxy       string // "caddy", "snippets", "none"
 	Choices     []Choice
+	InstallDeps bool // resolve what is missing rather than refusing over it
 }
 
 // Shape returns what was chosen for a component.
@@ -151,9 +153,10 @@ type Step struct {
 type Plan struct {
 	Options  Options
 	Steps    []Step
-	Ports    []int    // what will be bound, once, across every component
-	DNS      []string // records the domain needs for this shape
-	Warnings []string // things that are not refusals but should be read
+	Ports    []int       // what will be bound, once, across every component
+	DNS      []string    // records the domain needs for this shape
+	Warnings []string    // things that are not refusals but should be read
+	Needs    []deps.Need // what is missing, and what would be done about it
 }
 
 // Build works out what would happen. It does not touch the machine: every
@@ -165,19 +168,57 @@ func Build(f host.Facts, o Options) (Plan, error) {
 	if o.Domain == "" && !o.Local {
 		return p, fmt.Errorf("a domain is needed (or --local for a loopback evaluation)")
 	}
-	chosen := 0
+	chosen, wantContainers, wantHostWebmail := 0, false, false
+	for _, c := range []Component{Server, Console, Webmail} {
+		switch o.Shape(c) {
+		case Skip:
+		case Container:
+			chosen++
+			wantContainers = true
+		case Host:
+			chosen++
+			if c == Webmail {
+				wantHostWebmail = true
+			}
+		}
+	}
+	if chosen == 0 {
+		return p, fmt.Errorf("nothing chosen: pick at least one component")
+	}
+
+	// What is missing is not the same as what is impossible. Docker absent on
+	// a Debian machine is one package and a service; Node too old is a pinned
+	// tarball. The installer says what it would do about each and does it when
+	// told, rather than handing the operator a chore and calling it an error.
+	p.Needs = deps.For(f, wantContainers, wantHostWebmail)
+
 	for _, c := range []Component{Server, Console, Webmail} {
 		s := o.Shape(c)
 		if s == Skip {
 			continue
 		}
-		chosen++
-		if a := Available(f, c, s); !a.OK {
-			return p, fmt.Errorf("%s as a %s install: %s", names[c], s, a.Why)
+		a := Available(f, c, s)
+		if a.OK {
+			continue
 		}
+		if covered(p.Needs, c, s) && o.InstallDeps {
+			continue
+		}
+		if covered(p.Needs, c, s) {
+			return p, fmt.Errorf("%s as a %s install: %s\n\nThe installer can fix that:\n%s\nPass --install-deps to let it, or choose another shape",
+				names[c], s, a.Why, deps.Describe(p.Needs))
+		}
+		return p, fmt.Errorf("%s as a %s install: %s", names[c], s, a.Why)
 	}
-	if chosen == 0 {
-		return p, fmt.Errorf("nothing chosen: pick at least one component")
+
+	if len(p.Needs) > 0 && o.InstallDeps {
+		var detail []string
+		for _, n := range p.Needs {
+			for _, a := range n.Actions {
+				detail = append(detail, n.Name+": "+a)
+			}
+		}
+		p.Steps = append(p.Steps, Step{Title: "Install what this machine is missing", Detail: detail})
 	}
 
 	if !f.Root {
@@ -316,6 +357,31 @@ func Build(f host.Facts, o Options) (Plan, error) {
 		p.Warnings = append(p.Warnings, fmt.Sprintf("port %d (%s) is held by %s", held.Number, held.For, who))
 	}
 	return p, nil
+}
+
+// covered says whether a cell's unavailability is one of the things the
+// installer offered to fix.
+func covered(needs []deps.Need, c Component, s Shape) bool {
+	want := map[string]bool{}
+	switch {
+	case s == Container:
+		want["docker"], want["compose"] = true, true
+	case s == Host && c == Webmail:
+		want["node"] = true
+	default:
+		return false
+	}
+	found := false
+	for _, n := range needs {
+		if !want[n.Name] {
+			continue
+		}
+		if !n.Fixable {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 func (o Options) hostnames() []string {

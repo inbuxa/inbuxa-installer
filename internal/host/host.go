@@ -64,8 +64,13 @@ type Node struct {
 	Present bool
 	Version string // "22.14.0"
 	Major   int
+	Path    string // where it is; OwnPath when the installer put it there
 	Why     string
 }
+
+// OwnPath is where the installer puts a Node of its own, deliberately outside
+// PATH so it runs the webmail's unit and nothing else on the machine.
+const OwnPath = "/opt/inbuxa/node/bin/node"
 
 // Port is one of the ports the suite would like, and what holds it now.
 type Port struct {
@@ -80,7 +85,7 @@ type Port struct {
 // reports all of them regardless of the shape chosen, because the interface
 // needs to gray out a choice before the operator makes it.
 var wanted = []struct {
-	n   int
+	n    int
 	for_ string
 }{
 	{25, "SMTP, mail from other servers"},
@@ -199,12 +204,20 @@ var nodeVersion = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)`)
 
 func surveyNode(ctx context.Context) Node {
 	var n Node
-	bin, err := exec.LookPath("node")
-	if err != nil {
-		n.Why = "node is not installed"
-		return n
+	// The installer's own Node first: it is deliberately not on PATH, so
+	// looking only there would mean never seeing what we installed ourselves
+	// and offering to install it again.
+	bin := OwnPath
+	if _, err := os.Stat(bin); err != nil {
+		var err error
+		bin, err = exec.LookPath("node")
+		if err != nil {
+			n.Why = "node is not installed"
+			return n
+		}
 	}
 	n.Present = true
+	n.Path = bin
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, bin, "--version").Output()
