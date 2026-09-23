@@ -1,0 +1,71 @@
+# Written by the inbuxa installer {{.Version}} for {{.Domain}}.
+#
+# Caddy holds 80 and 443 for two programs that both want certificates for some
+# of the same names: Caddy itself, to serve HTTPS, and the mail server, whose
+# IMAP and SMTP listeners need a certificate of their own. They are kept apart
+# by challenge type rather than by name:
+#
+#   Caddy       TLS-ALPN-01 on 443 -- for the server's names it never uses 80.
+#   the server  HTTP-01 on 80, which Caddy forwards to it untouched.
+#
+# So neither answers the other's challenge, and neither needs the other's key.
+
+{
+	email {{.Email}}
+{{- if .ACMEDirectory}}
+	acme_ca {{.ACMEDirectory}}
+{{- end}}
+{{- if .ACMECARoot}}
+	acme_ca_root /etc/caddy/acme-ca-root.pem
+{{- end}}
+}
+{{- if .Webmail}}
+
+# The webmail. Push arrives as Server-Sent Events, so responses are flushed as
+# they are written rather than buffered.
+{{.WebmailHost}} {
+	encode zstd gzip
+	reverse_proxy webmail:8080 {
+		flush_interval -1
+	}
+}
+{{- end}}
+{{- if .Console}}
+
+# The console. Static files: it talks to the mail server from the browser, so
+# nothing here proxies the API.
+{{.ConsoleHost}} {
+	encode zstd gzip
+	reverse_proxy console:8080
+}
+{{- end}}
+
+# The mail server's web side: JMAP for the front ends and any other client,
+# CalDAV, CardDAV, autoconfig and MTA-STS. The server is told to believe the
+# X-Forwarded-For Caddy sets here, so a scanner is banned by its own address
+# rather than by Caddy's.
+{{join .ServerNames ", "}} {
+	tls {
+		issuer acme {
+{{- if .ACMEDirectory}}
+			dir {{.ACMEDirectory}}
+{{- end}}
+{{- if .ACMECARoot}}
+			trusted_roots /etc/caddy/acme-ca-root.pem
+{{- end}}
+			email {{.Email}}
+			disable_http_challenge
+		}
+	}
+	reverse_proxy server:8080
+}
+
+# Port 80 for the server's names is its challenge path and a redirect.
+{{range $i, $n := .ServerNames}}{{if $i}}, {{end}}http://{{$n}}{{end}} {
+	handle /.well-known/acme-challenge/* {
+		reverse_proxy server:8080
+	}
+	handle {
+		redir https://{host}{uri} 308
+	}
+}

@@ -12,9 +12,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/apply"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/deps"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/plan"
@@ -131,12 +134,52 @@ func install(args []string) int {
 		return 0
 	}
 	if !*yes {
-		fmt.Fprintln(os.Stderr, "\nnothing has happened yet: applying is not built in this build (pass --dry-run to silence this)")
+		fmt.Fprintln(os.Stderr, "\nNothing has happened yet. Pass --yes to carry this out.")
 		return 1
 	}
-	fmt.Fprintln(os.Stderr, "\napply is not built yet")
-	return 1
+
+	fmt.Println("\nApplying:")
+	log := &printer{}
+	res, err := apply.Run(context.Background(), p, log)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
+		return 1
+	}
+	fmt.Println("\nChecking it works:")
+	problems := apply.Verify(context.Background(), res,
+		o.Shape(plan.Console) != plan.Skip, o.Shape(plan.Webmail) != plan.Skip, log)
+	for _, why := range problems {
+		fmt.Fprintln(os.Stderr, "  problem: "+why)
+	}
+
+	fmt.Printf("\nDone. %s\n", res.Dir)
+	fmt.Printf("  administrator  %s\n", res.AdminUser)
+	if res.FirstUser != "" {
+		fmt.Printf("  first mailbox  %s\n", res.FirstUser)
+	}
+	fmt.Printf("  passwords      %s\n", filepath.Join(res.Dir, "credentials.txt"))
+	if res.ConsoleURL != "" {
+		fmt.Printf("  console        %s\n", res.ConsoleURL)
+	}
+	if res.WebmailURL != "" {
+		fmt.Printf("  webmail        %s\n", res.WebmailURL)
+	}
+	if res.ZoneFile != "" {
+		fmt.Printf("  dns records    %s\n", res.ZoneFile)
+	}
+	if len(problems) > 0 {
+		return 1
+	}
+	return 0
 }
+
+// printer is apply's log on the flag path: steps as lines, everything a
+// command says indented under the step that ran it.
+type printer struct{}
+
+func (printer) Step(format string, a ...any) { fmt.Printf("  "+format+"\n", a...) }
+func (printer) Info(format string, a ...any) { fmt.Printf("      "+format+"\n", a...) }
+func (printer) Out() io.Writer               { return os.Stdout }
 
 // depsCmd is the offer on its own: what the chosen shapes need that this
 // machine does not have, and -- with --install -- the doing of it. It exists

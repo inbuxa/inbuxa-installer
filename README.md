@@ -29,9 +29,21 @@ This is early. What is built:
   anything is put in place. `install --install-deps` does the same as part of
   a run. A missing dependency is an offer, not a refusal.
 
-Not built yet: applying the plan, the terminal interface, `join`, `status`,
+- **`install --yes`** -- carries the plan out, for container shapes: writes
+  the deployment, fetches the images, brings the mail server up in bootstrap
+  mode with a credential that exists only for that step, completes bootstrap,
+  brings the rest up without it, exempts the front ends from the auto-ban,
+  creates the first mailbox, writes `credentials.txt` and `dns.zone`, and
+  then checks that all three answer.
+
+Not built yet: host installs, the terminal interface, `join`, `status`,
 `upgrade`, `uninstall`. The design is in the inbuxa specification (§6.1 and
 the installer draft); the phases are there too.
+
+    inbuxa install --local --domain example.test --install-deps --yes
+
+is the shortest thing that works today: the whole suite on loopback, with no
+DNS and no certificates, on a machine that starts with nothing.
 
 ## Building and testing
 
@@ -40,9 +52,11 @@ the installer draft); the phases are there too.
 The installer writes units, creates users and takes ports 25 and 443, so it
 is tested on a throwaway virtual machine rather than on anybody's desk:
 
-    e2e/vm/up.sh                        a Debian 13 machine, in qemu, as you
-    e2e/vm/run.sh e2e/cases/survey.sh   rewind it, then run a case inside
-    e2e/vm/down.sh                      remove it
+    e2e/vm/up.sh                              a Debian 13 machine, in qemu, as you
+    e2e/vm/run.sh e2e/cases/survey.sh         what it says about a machine
+    e2e/vm/run.sh e2e/cases/deps.sh           the offer, and taking it
+    e2e/vm/run.sh e2e/cases/install-local.sh  a whole suite, and signing in to it
+    e2e/vm/down.sh                            remove it
 
 Each case starts from a copy of the machine taken when it was new, so a run
 is free to break it and a failure is the installer's rather than the last
