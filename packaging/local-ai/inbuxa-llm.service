@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: 2026 Coffey Labs
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The local language model for inbuxa's AI spam classifier: llama.cpp's
+# server with Qwen3 4B Instruct 2507 (Apache-2.0), converted from Qwen's
+# official weights and quantized to Q4_K_M. It runs in the mail network
+# namespace and listens only on its loopback, 127.0.0.1:8080, where the mail
+# server's x:AiModel "local" points. Nothing leaves the machine.
+#
+# Bounded so it can never starve the mail server: 4 cores, 8 GB. Four slots
+# match the classifier's default of four requests in flight (inbuxa:AiLimits
+# maxConcurrentCalls), each with a 4096-token context.
+[Unit]
+Description=inbuxa local AI model (llama.cpp, Qwen3 4B Instruct 2507)
+After=mail-netns.service
+Requires=mail-netns.service
+
+[Service]
+NetworkNamespacePath=/run/netns/mail
+Environment=LD_LIBRARY_PATH=/opt/llama/b11160/llama-b11160
+ExecStart=/opt/llama/b11160/llama-b11160/llama-server \
+    --model /opt/llama/models/qwen3-4b-instruct-2507-Q4_K_M.gguf \
+    --alias qwen3-4b-instruct-2507 \
+    --host 127.0.0.1 --port 8080 \
+    --threads 4 --parallel 4 --ctx-size 16384 \
+    --no-webui
+DynamicUser=yes
+CPUQuota=400%
+MemoryMax=8G
+Nice=10
+Restart=on-failure
+RestartSec=10
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
