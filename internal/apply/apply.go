@@ -33,6 +33,7 @@ import (
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/jmap"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/plan"
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/state"
 )
 
 // Images are the defaults. They are tags rather than digests for now: the
@@ -185,6 +186,16 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		return nil, err
 	}
 
+	// A machine that already runs this installation is converged, not set up
+	// again. First boot happens once: bootstrap, the first administrator, the
+	// first account, the ACME account. Running it a second time asks a
+	// configured server for bootstrap credentials it stopped accepting the
+	// moment it was configured -- which is exactly what adding or removing a
+	// front end used to do, and why it could not.
+	if existing, err := state.Load(); err == nil && existing.Installed() {
+		return converge(ctx, o, stack, cmp, existing, f, log)
+	}
+
 	// The bootstrap credential lives in an override file for this step only,
 	// and its password only in this process. Bringing the stack up afterwards
 	// without the override recreates the server without the variable, so no
@@ -237,7 +248,11 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	log.Info("administrator %s, password in %s", admin.Username, filepath.Join(dir, "credentials.txt"))
 
 	log.Step("starting the rest of the stack")
-	if err := cmp.Run(ctx, "up", "-d"); err != nil {
+	// --remove-orphans: the compose file is rendered from the shapes asked
+	// for, so a component the topology no longer lists is simply not in it
+	// any more. Without this its container would keep running, belonging to
+	// a project that no longer describes it.
+	if err := cmp.Run(ctx, "up", "-d", "--remove-orphans"); err != nil {
 		return res, err
 	}
 
@@ -286,7 +301,15 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		}
 	}
 
-	if !o.Local {
+	// Certificates need something holding port 80 for the HTTP-01 challenge,
+	// which is the proxy. Asked for on a machine with no proxy, the order
+	// can only fail -- so this says whose job it is instead of leaving a
+	// failed ACME account behind and stopping the install over it.
+	if !o.Local && !stack.Proxy {
+		log.Info("no proxy here, so certificates are yours to arrange: the server's own names are %s",
+			strings.Join(stack.ServerNames(), ", "))
+	}
+	if !o.Local && stack.Proxy {
 		log.Step("turning on certificates")
 		if _, err := srv.EnableACME(ctx, domainID, o.ACMEDirectory, o.ACMEEmail); err != nil {
 			return res, fmt.Errorf("enabling ACME: %w", err)
@@ -317,6 +340,23 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	res.FirstUser, res.FirstPass = first+"@"+o.Domain, pass
 	if err := writeCredentials(dir, res); err != nil {
 		return res, err
+	}
+
+	// What this machine now runs, written down so the next run diffs against
+	// intent rather than guessing from what happens to be up.
+	st, err := state.Load()
+	if err == nil {
+		st.Machine, st.Dir, st.Domain = o.Machine, dir, o.Domain
+		st.Runtime, st.Topology = f.Runtime.Kind, o.TopologyPath
+		st.Shapes = map[string]string{}
+		for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
+			if sh := o.Shape(c); sh != plan.Skip {
+				st.Shapes[string(c)] = string(sh)
+			}
+		}
+		if err := st.Save(); err != nil {
+			log.Info("could not write %s: %v", state.Path, err)
+		}
 	}
 
 	zone, err := srv.DNSZone(ctx, domainID)
@@ -358,6 +398,64 @@ func waitForCertificate(ctx context.Context, srv *jmap.Client, log Log, domainID
 		}
 	}
 	return ""
+}
+
+// converge brings an installed machine in line with what it is now asked to
+// run: the deployment is rewritten from the shapes chosen, the stack is
+// brought up, and anything no longer in the file goes with --remove-orphans.
+// Nothing touches the mail: data volumes are left alone, and a component
+// that is removed can be added back with what it had.
+func converge(ctx context.Context, o plan.Options, stack compose.Stack, cmp docker.Compose,
+	st *state.State, f host.Facts, log Log) (*Result, error) {
+
+	res := &Result{
+		Dir: o.Dir, ConsoleURL: stack.ConsoleURL, WebmailURL: stack.WebmailURL,
+		ServerURL: stack.ServerPublicURL,
+	}
+	if b, err := os.ReadFile(filepath.Join(o.Dir, "credentials.txt")); err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if fields := strings.Fields(line); len(fields) == 2 && fields[0] == "administrator" {
+				res.AdminUser = fields[1]
+			}
+		}
+	}
+
+	log.Step("bringing the stack in line with the file")
+	if err := cmp.Run(ctx, "up", "-d", "--remove-orphans"); err != nil {
+		return res, withLogs(ctx, err, cmp, "server")
+	}
+
+	// The server reads the front-end URLs from its environment, so a front
+	// end that was added or removed changes what it was started with. Only
+	// restart when that actually changed.
+	if st.Shapes["console"] != string(o.Shape(plan.Console)) || st.Shapes["webmail"] != string(o.Shape(plan.Webmail)) {
+		log.Info("the front ends changed, so the server is restarted to see them")
+		if err := cmp.Run(ctx, "restart", "server"); err != nil {
+			return res, err
+		}
+		// Do not report a finished converge over a server that is still
+		// coming back: a few seconds of refused connections is the one
+		// moment of this that looks like an outage, and it should be over
+		// before the command returns.
+		if err := waitFor(ctx, log, "the server to answer again", 120*time.Second, func(ctx context.Context) error {
+			return live(ctx, "http://"+stack.ServerBind)
+		}); err != nil {
+			return res, withLogs(ctx, err, cmp, "server")
+		}
+	}
+
+	st.Machine, st.Dir, st.Domain = o.Machine, o.Dir, o.Domain
+	st.Runtime, st.Topology = f.Runtime.Kind, o.TopologyPath
+	st.Shapes = map[string]string{}
+	for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
+		if sh := o.Shape(c); sh != plan.Skip {
+			st.Shapes[string(c)] = string(sh)
+		}
+	}
+	if err := st.Save(); err != nil {
+		log.Info("could not write %s: %v", state.Path, err)
+	}
+	return res, nil
 }
 
 // Verify is the last step: does what was installed actually answer?

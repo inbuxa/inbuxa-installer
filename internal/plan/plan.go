@@ -67,6 +67,12 @@ type Options struct {
 	// Let's Encrypt, which is what an install should use.
 	ACMEDirectory string
 	ACMECARoot    string
+
+	// Where this came from, when it came from a topology file: the machine's
+	// name in it, and the path, both recorded in the state file so a later
+	// run knows which part of which file this machine is.
+	Machine      string
+	TopologyPath string
 }
 
 // Shape returns what was chosen for a component.

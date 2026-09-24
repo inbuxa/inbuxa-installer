@@ -43,6 +43,13 @@ This is early. What is built:
   creates the first mailbox, writes `credentials.txt` and `dns.zone`, and
   then checks that all three answer.
 
+- **`plan -f` / `apply -f` / `export`** -- a whole installation described in
+  one file, however many machines. Each machine acts on its own part and
+  prints the command to run on the others; it never reaches them. `plan`
+  diffs the file against what is actually installed here and changes
+  nothing; `apply` converges to it, adding and removing components;
+  `export` writes the file from what is already here.
+
 Not built yet: host installs, the terminal interface, `join`, `status`,
 `upgrade`, `uninstall`. The design is in the inbuxa specification (§6.1 and
 the installer draft); the phases are there too.
@@ -68,6 +75,7 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/run.sh e2e/cases/deps.sh           the offer, and taking it
     e2e/vm/run.sh e2e/cases/install-local.sh   a whole suite, and signing in to it
     e2e/vm/run.sh e2e/cases/install-public.sh  the same with real ports and certificates
+    e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
     e2e/vm/down.sh                            remove it
 
 Each case starts from a copy of the machine taken when it was new, so a run

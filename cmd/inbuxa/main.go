@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -22,6 +23,8 @@ import (
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/deps"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/plan"
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/state"
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/topology"
 )
 
 // version is stamped by the release build; a build from a working tree says
@@ -33,6 +36,9 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa install [flags]     install or converge (no flags: the interface)
   inbuxa survey              what this machine is, as the installer sees it
   inbuxa deps [--install]    what is missing for a shape, and fix it
+  inbuxa plan -f FILE        what a topology file would change here
+  inbuxa apply -f FILE       make this machine match that file
+  inbuxa export [-o FILE]    write a topology file from what is here
   inbuxa version             this program's version
 
 install flags:
@@ -89,6 +95,12 @@ func main() {
 		os.Exit(survey())
 	case "deps":
 		os.Exit(depsCmd(os.Args[2:]))
+	case "plan":
+		os.Exit(topologyCmd(os.Args[2:], false))
+	case "apply":
+		os.Exit(topologyCmd(os.Args[2:], true))
+	case "export":
+		os.Exit(exportCmd(os.Args[2:]))
 	case "version":
 		fmt.Println(version)
 	case "-h", "--help", "help":
@@ -267,6 +279,167 @@ func depsCmd(args []string) int {
 	fmt.Println("\nNow:")
 	fmt.Print(render(after))
 	return 0
+}
+
+// topologyCmd is plan and apply: the same reading of the same file, one of
+// which stops after printing.
+//
+// A machine acts on its own part of the file and prints what the others have
+// to run. It never reaches them -- the file is copied across by whoever owns
+// those machines, and run there. That is the whole security posture of the
+// designer this is the executor for: emit, never execute.
+func topologyCmd(args []string, doIt bool) int {
+	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	var (
+		file        = fs.String("f", "", "")
+		machineName = fs.String("machine", "", "")
+		yes         = fs.Bool("yes", false, "")
+		installDeps = fs.Bool("install-deps", false, "")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *file == "" {
+		fmt.Fprintln(os.Stderr, "which file? pass -f topology.json")
+		return 2
+	}
+	t, err := topology.Load(*file)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+
+	name := *machineName
+	if name == "" {
+		h, _ := os.Hostname()
+		name = h
+	}
+	m, ok := t.Machine(name)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "this machine is %q, which the file does not mention.\n", name)
+		fmt.Fprintf(os.Stderr, "It describes: %s\n", strings.Join(machineNames(t), ", "))
+		fmt.Fprintln(os.Stderr, "Pass --machine to say which one this is.")
+		return 1
+	}
+
+	st, err := state.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	d := topology.Compare(st, m)
+	fmt.Print(d.String())
+	fmt.Print(topology.Elsewhere(t, *file, name))
+
+	if !doIt {
+		return 0
+	}
+	if d.Empty() {
+		return 0
+	}
+	if !*yes {
+		fmt.Fprintln(os.Stderr, "\nNothing has happened yet. Pass --yes to carry this out.")
+		return 1
+	}
+
+	// Removals are the half that can lose something. Naming them again here,
+	// after the diff and before the work, is the last chance to read them.
+	if rm := d.Removals(); len(rm) > 0 {
+		fmt.Println()
+		for _, c := range rm {
+			fmt.Printf("  removing %s from this machine; its data volumes are left in place\n", c.Component)
+		}
+	}
+
+	o := plan.Options{
+		Domain: t.Domain, MailHost: t.MailHost, ConsoleHost: t.ConsoleHost,
+		WebmailHost: t.WebmailHost, ACMEEmail: t.ACMEEmail,
+		Dir: m.Dir, Proxy: m.Proxy, InstallDeps: *installDeps,
+		Machine: name, TopologyPath: *file,
+	}
+	for _, kind := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
+		sh := plan.Skip
+		if s := m.Shape(string(kind)); s != "" {
+			sh = plan.Shape(s)
+		}
+		o.Choices = append(o.Choices, plan.Choice{Component: kind, Shape: sh})
+	}
+
+	f := host.Survey(context.Background())
+	p, err := plan.Build(f, o)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "\ncannot apply this file here: "+err.Error())
+		return 1
+	}
+	fmt.Println("\nApplying:")
+	log := &printer{}
+	res, err := apply.Run(context.Background(), p, f, log)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
+		return 1
+	}
+	fmt.Printf("\nDone. %s\n", res.Dir)
+	if res.AdminUser != "" {
+		fmt.Printf("  administrator  %s\n", res.AdminUser)
+	}
+	return 0
+}
+
+// exportCmd writes what is on this machine as a topology file, so a design
+// starts from a system that exists rather than a blank page.
+func exportCmd(args []string) int {
+	fs := flag.NewFlagSet("export", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	out := fs.String("o", "", "")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	st, err := state.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	if !st.Installed() {
+		fmt.Fprintln(os.Stderr, "nothing is installed here, so there is nothing to describe")
+		return 1
+	}
+	name := st.Machine
+	if name == "" {
+		name, _ = os.Hostname()
+	}
+	m := topology.Machine{Name: name, Dir: st.Dir}
+	for _, kind := range []string{"server", "console", "webmail"} {
+		if sh, ok := st.Shapes[kind]; ok {
+			m.Components = append(m.Components, topology.Component{Kind: kind, Shape: sh})
+		}
+	}
+	t := &topology.Topology{Version: topology.Version, Domain: st.Domain, Machines: []topology.Machine{m}}
+	t.Defaults()
+	if err := t.Validate(); err != nil {
+		fmt.Fprintln(os.Stderr, "what is installed here does not describe a whole installation: "+err.Error())
+		fmt.Fprintln(os.Stderr, "(a machine running only front ends is one part of a file, not all of it)")
+		return 1
+	}
+	if *out == "" {
+		b, _ := json.MarshalIndent(t, "", "  ")
+		fmt.Println(string(b))
+		return 0
+	}
+	if err := t.Save(*out); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	fmt.Printf("wrote %s\n", *out)
+	return 0
+}
+
+func machineNames(t *topology.Topology) []string {
+	var out []string
+	for _, m := range t.Machines {
+		out = append(out, m.Name)
+	}
+	return out
 }
 
 func shape(s string) (plan.Shape, error) {

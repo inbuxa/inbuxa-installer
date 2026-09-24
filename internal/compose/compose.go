@@ -133,12 +133,21 @@ func Write(dir string, s *Stack) (Secrets, error) {
 		return sec, err
 	}
 
+	// Secrets are generated once and kept. Rewriting the deployment to add
+	// or remove a component must not roll the webmail's session key or the
+	// OAuth client secret the server was told: the point of converging is
+	// that everything not being changed stays as it was.
+	sec = readSecrets(filepath.Join(dir, ".env"))
 	var err error
-	if sec.AppSecret, err = secret(); err != nil {
-		return sec, err
+	if sec.AppSecret == "" {
+		if sec.AppSecret, err = secret(); err != nil {
+			return sec, err
+		}
 	}
-	if sec.WebmailOAuth, err = secret(); err != nil {
-		return sec, err
+	if sec.WebmailOAuth == "" {
+		if sec.WebmailOAuth, err = secret(); err != nil {
+			return sec, err
+		}
 	}
 
 	funcs := template.FuncMap{"join": strings.Join}
@@ -169,6 +178,29 @@ func Write(dir string, s *Stack) (Secrets, error) {
 		return sec, err
 	}
 	return sec, nil
+}
+
+// readSecrets recovers what a previous run generated, so a converge keeps
+// them. A missing or unreadable file means a first install, and new ones.
+func readSecrets(path string) Secrets {
+	var sec Secrets
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return sec
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "APP_SECRET":
+			sec.AppSecret = v
+		case "WEBMAIL_CLIENT_SECRET":
+			sec.WebmailOAuth = v
+		}
+	}
+	return sec
 }
 
 func secret() (string, error) {
