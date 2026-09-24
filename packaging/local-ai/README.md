@@ -23,7 +23,7 @@ The mail server's model entry (`x:AiModel`) points at
 `qwen3-4b-instruct-2507`, which is the service's `--alias`. The address is
 the mail namespace's own loopback, so message text never leaves the machine.
 
-Measured on production (host1, CPU only): about 1.2 s per message once warm,
+Measured on production (CPU only): about 1.2 s per message once warm,
 4 s for the first; about 4.3 GB of memory.
 
 ## The model, built from source
@@ -55,10 +55,17 @@ systemctl daemon-reload && systemctl enable --now inbuxa-llm
 ip netns exec mail curl -s http://127.0.0.1:8080/health   # {"status":"ok"}
 ```
 
+Port 8080 is the mail namespace's own loopback, not the host's, so it can't
+collide with anything outside the namespace. That matters because the
+installer's container install binds the webmail to the host's
+`127.0.0.1:8080`.
+
 A host without the mail namespace drops `NetworkNamespacePath`,
-`After=mail-netns.service` and `Requires=mail-netns.service` from the unit;
-the service then listens on the host's loopback, which is where a mail server
-on that host reaches it.
+`After=mail-netns.service` and `Requires=mail-netns.service` from the unit,
+and the service then listens on the host's loopback. There, pick another port
+(`--port` in the unit) if the installer has set the host up, since the webmail
+already holds 8080, and change the address in inbuxa Admin's Local AI page
+(or the model's `url`) to match.
 
 ## Undoing it
 
