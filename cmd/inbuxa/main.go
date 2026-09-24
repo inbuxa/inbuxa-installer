@@ -21,6 +21,7 @@ import (
 
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/apply"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/deps"
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/discover"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/plan"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/state"
@@ -38,6 +39,7 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa deps [--install]    what is missing for a shape, and fix it
   inbuxa plan -f FILE        what a topology file would change here
   inbuxa apply -f FILE       make this machine match that file
+  inbuxa status              what is installed here, and whether it agrees
   inbuxa export [-o FILE]    write a topology file from what is here
   inbuxa version             this program's version
 
@@ -101,6 +103,8 @@ func main() {
 		os.Exit(topologyCmd(os.Args[2:], true))
 	case "export":
 		os.Exit(exportCmd(os.Args[2:]))
+	case "status":
+		os.Exit(statusCmd())
 	case "version":
 		fmt.Println(version)
 	case "-h", "--help", "help":
@@ -395,26 +399,51 @@ func exportCmd(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	ctx := context.Background()
 	st, err := state.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 1
 	}
-	if !st.Installed() {
+	f := host.Survey(ctx)
+	found := discover.Run(ctx, f)
+
+	if !st.Installed() && found.Dir == "" {
 		fmt.Fprintln(os.Stderr, "nothing is installed here, so there is nothing to describe")
 		return 1
 	}
+
 	name := st.Machine
 	if name == "" {
 		name, _ = os.Hostname()
 	}
-	m := topology.Machine{Name: name, Dir: st.Dir}
+	dir, domain := st.Dir, st.Domain
+	if dir == "" {
+		dir = found.Dir
+	}
+	if domain == "" {
+		domain = found.Domain
+	}
+
+	// Intent first, because it knows the shapes; reality for anything intent
+	// does not mention, so a deployment made by an older version or by hand
+	// still describes itself.
+	m := topology.Machine{Name: name, Dir: dir}
 	for _, kind := range []string{"server", "console", "webmail"} {
-		if sh, ok := st.Shapes[kind]; ok {
-			m.Components = append(m.Components, topology.Component{Kind: kind, Shape: sh})
+		switch {
+		case st.Shapes[kind] != "":
+			m.Components = append(m.Components, topology.Component{Kind: kind, Shape: st.Shapes[kind]})
+		case found.Services[kind] != "":
+			m.Components = append(m.Components, topology.Component{Kind: kind, Shape: "container"})
 		}
 	}
-	t := &topology.Topology{Version: topology.Version, Domain: st.Domain, Machines: []topology.Machine{m}}
+	if !found.Proxy && found.Dir != "" {
+		m.Proxy = "none"
+	}
+	t := &topology.Topology{Version: topology.Version, Domain: domain, Machines: []topology.Machine{m}}
+	if found.MailHost != "" {
+		t.MailHost = found.MailHost
+	}
 	t.Defaults()
 	if err := t.Validate(); err != nil {
 		fmt.Fprintln(os.Stderr, "what is installed here does not describe a whole installation: "+err.Error())
@@ -431,6 +460,72 @@ func exportCmd(args []string) int {
 		return 1
 	}
 	fmt.Printf("wrote %s\n", *out)
+	return 0
+}
+
+// statusCmd is the same reading as export, shown to a person: what is
+// installed, what is running, and where the two disagree.
+func statusCmd() int {
+	ctx := context.Background()
+	st, err := state.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	f := host.Survey(ctx)
+	found := discover.Run(ctx, f)
+
+	if !st.Installed() && found.Dir == "" {
+		fmt.Println("Nothing is installed on this machine.")
+		return 0
+	}
+
+	name := st.Machine
+	if name == "" {
+		name, _ = os.Hostname()
+	}
+	fmt.Printf("This machine is %q", name)
+	if st.Topology != "" {
+		fmt.Printf(", from %s", st.Topology)
+	}
+	fmt.Println()
+	if found.Dir != "" {
+		fmt.Printf("  %-14s %s\n", "deployment", found.Dir)
+	}
+	if found.Domain != "" || st.Domain != "" {
+		domain := st.Domain
+		if domain == "" {
+			domain = found.Domain
+		}
+		fmt.Printf("  %-14s %s\n", "domain", domain)
+	}
+	if found.Runtime != "" {
+		fmt.Printf("  %-14s %s\n", "runtime", found.Runtime)
+	}
+
+	fmt.Println("\nComponents")
+	for _, kind := range []string{"server", "console", "webmail"} {
+		shape, intended := st.Shapes[kind]
+		state, present := found.Services[kind]
+		switch {
+		case !intended && !present:
+			continue
+		case intended && present:
+			fmt.Printf("  %-8s installed as a %-9s %s\n", kind, shape, state)
+		case intended:
+			fmt.Printf("  %-8s installed as a %-9s missing from the deployment\n", kind, shape)
+		default:
+			fmt.Printf("  %-8s %-24s %s\n", kind, "in the deployment", state)
+		}
+	}
+
+	if d := discover.Drift(st.Shapes, found); len(d) > 0 {
+		fmt.Println("\nWorth a look")
+		for _, line := range d {
+			fmt.Printf("  - %s\n", line)
+		}
+		return 1
+	}
 	return 0
 }
 

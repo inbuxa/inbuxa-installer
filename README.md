@@ -49,6 +49,10 @@ This is early. What is built:
   diffs the file against what is actually installed here and changes
   nothing; `apply` converges to it, adding and removing components;
   `export` writes the file from what is already here.
+- **`status`** -- what is installed, what is running, and where those two
+  disagree: a container stopped by hand, or a deployment nothing recorded
+  installing. It exits non-zero when they disagree, so a machine can be
+  asked in a script whether it still matches itself.
 
 Not built yet: host installs, the terminal interface, `join`, `status`,
 `upgrade`, `uninstall`. The design is in the inbuxa specification (§6.1 and
@@ -76,6 +80,7 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/run.sh e2e/cases/install-local.sh   a whole suite, and signing in to it
     e2e/vm/run.sh e2e/cases/install-public.sh  the same with real ports and certificates
     e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
+    e2e/vm/run.sh e2e/cases/status-export.sh  intent against reality, and the file
     e2e/vm/down.sh                            remove it
 
 Each case starts from a copy of the machine taken when it was new, so a run
