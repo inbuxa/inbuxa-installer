@@ -30,16 +30,19 @@ DIR=/var/lib/inbuxa
 # Whichever runtime this machine has. The installer picks docker where there
 # is one and podman on the Red Hat family; a case that says "docker" only
 # tests half the distributions it is run on.
-if command -v docker >/dev/null 2>&1; then
-  RT=docker
-  compose() { docker compose -f "$DIR/compose.yaml" "$@"; }
-else
-  RT=podman
-  compose() {
+#
+# Asked at each call, not once at the top: these cases start on a machine
+# with no runtime at all and install one along the way, so anything decided
+# up here is decided before the answer exists.
+rt() { command -v docker >/dev/null 2>&1 && echo docker || echo podman; }
+compose() {
+  if [ "$(rt)" = docker ]; then
+    docker compose -f "$DIR/compose.yaml" "$@"
+  else
     DOCKER_HOST=unix:///run/podman/podman.sock \
       /usr/local/lib/docker/cli-plugins/docker-compose -f "$DIR/compose.yaml" "$@"
-  }
-fi
+  fi
+}
 WORK=/tmp/lab
 LABNET=inbuxa-e2e
 LABSUBNET=172.31.254.0/24
@@ -159,7 +162,7 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$WORK/chain.pem" --resol
 
 echo
 echo "==> and nothing was left behind that should not be"
-ENVOUT="$($RT inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$(compose ps -q server)")"
+ENVOUT="$("$(rt)" inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$(compose ps -q server)")"
 grep -q "RECOVERY_ADMIN" <<<"$ENVOUT" && bad "the server still carries a recovery admin" || ok "no recovery admin on the server"
 
 echo

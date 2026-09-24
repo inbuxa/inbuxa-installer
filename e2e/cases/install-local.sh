@@ -24,16 +24,19 @@ DIR=/var/lib/inbuxa
 # Whichever runtime this machine has. The installer picks docker where there
 # is one and podman on the Red Hat family; a case that says "docker" only
 # tests half the distributions it is run on.
-if command -v docker >/dev/null 2>&1; then
-  RT=docker
-  compose() { docker compose -f "$DIR/compose.yaml" "$@"; }
-else
-  RT=podman
-  compose() {
+#
+# Asked at each call, not once at the top: these cases start on a machine
+# with no runtime at all and install one along the way, so anything decided
+# up here is decided before the answer exists.
+rt() { command -v docker >/dev/null 2>&1 && echo docker || echo podman; }
+compose() {
+  if [ "$(rt)" = docker ]; then
+    docker compose -f "$DIR/compose.yaml" "$@"
+  else
     DOCKER_HOST=unix:///run/podman/podman.sock \
       /usr/local/lib/docker/cli-plugins/docker-compose -f "$DIR/compose.yaml" "$@"
-  }
-fi
+  fi
+}
 
 echo "==> installing"
 OUT="$(/tmp/inbuxa install --local --domain example.test --install-deps --yes 2>&1)"; rc=$?
@@ -66,7 +69,7 @@ curl -fsS http://127.0.0.1:8080/api/health 2>/dev/null | grep -q '"ok":true' && 
 
 echo
 echo "==> the bootstrap credential did not outlive the setup"
-ENVOUT="$($RT inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$(compose ps -q server)")"
+ENVOUT="$("$(rt)" inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$(compose ps -q server)")"
 grep -q "RECOVERY_ADMIN" <<<"$ENVOUT" && { bad "the server still carries a recovery admin"; echo "$ENVOUT" | grep RECOVERY | sed 's/^/    /'; } || ok "no recovery admin in the running server"
 grep -q "INBUXA_WEBMAIL_CLIENT_SECRET" <<<"$ENVOUT" && ok "the webmail's client secret is where it belongs" || bad "the server has no webmail client secret"
 
