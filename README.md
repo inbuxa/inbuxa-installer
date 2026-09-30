@@ -1,5 +1,9 @@
 # inbuxa-installer
 
+> [!NOTE]
+> Development happens on [git.coffeylabs.org/inbuxa/inbuxa-installer](https://git.coffeylabs.org/inbuxa/inbuxa-installer); the copy on GitHub is a read-only mirror.
+> Report issues at **[git.coffeylabs.org/inbuxa/inbuxa-installer/issues](https://git.coffeylabs.org/inbuxa/inbuxa-installer/issues)**, and join discussions at **[community.coffeylabs.org](https://community.coffeylabs.org)**.
+
 One program that installs the **inbuxa** suite on the machine you run it on:
 the mail server, the administration console and the webmail, each as a
 container or on the host, in any mixture.
