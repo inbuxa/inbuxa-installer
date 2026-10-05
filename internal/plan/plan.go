@@ -338,7 +338,7 @@ func Build(f host.Facts, o Options) (Plan, error) {
 			p.Steps = append(p.Steps, Step{
 				Title: "Start the webmail as a container",
 				Detail: []string{
-					"image: registry.coffeylabs.org/inbuxa/ihasmail-inbuxa (pinned by digest)",
+					"image: registry.coffeylabs.org/inbuxa/inbuxa-webmail (pinned by digest)",
 					"port: 8080 on loopback, behind the proxy",
 					"secret: the OAuth client secret from first boot, written once",
 				},

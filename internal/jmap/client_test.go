@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fake answers each request with the response registered for its first
@@ -19,7 +20,8 @@ func fake(t *testing.T, responses map[string]string) (*Client, *[]map[string]any
 	t.Helper()
 	var seen []map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if u, p, _ := r.BasicAuth(); u != "admin" || p != "pw" {
+		// The password, or the API key a configured server takes instead.
+		if u, p, _ := r.BasicAuth(); (u != "admin" || p != "pw") && r.Header.Get("Authorization") != "Bearer API_key" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -60,7 +62,7 @@ func TestBootstrapReturnsTheAdministrator(t *testing.T) {
 	if update["requestTlsCertificate"] != false || update["tracer"].(map[string]any)["@type"] != "Stdout" {
 		t.Errorf("bootstrap sent %v", update)
 	}
-	if using := (*seen)[0]["using"].([]string); len(using) != 2 || using[1] != "urn:stalwart:jmap" {
+	if using := (*seen)[0]["using"].([]string); len(using) != 2 || using[1] != "urn:inbuxa:jmap:registry" {
 		t.Errorf("using = %v", using)
 	}
 }
@@ -120,5 +122,35 @@ func TestDomainIDNotFound(t *testing.T) {
 	})
 	if _, err := c.DomainID(context.Background(), "example.com"); err == nil {
 		t.Fatal("found a domain that is not there")
+	}
+}
+
+func TestAPIKeyIsCreatedWithAnExpiryAndThenSentAsBearer(t *testing.T) {
+	c, seen := fake(t, map[string]string{
+		"x:ApiKey/set": `{"methodResponses":[["x:ApiKey/set",{"created":{"key":{"id":"k1","secret":"API_key"}},"destroyed":["k1"]},"0"]]}`,
+	})
+	id, token, err := c.CreateAPIKey(context.Background(), "setup", time.Hour)
+	if err != nil || id != "k1" || token != "API_key" {
+		t.Fatalf("id %q, token %q, err %v", id, token, err)
+	}
+	key := (*seen)[0]["args"].(map[string]any)["create"].(map[string]any)["key"].(map[string]any)
+	if exp, _ := key["expiresAt"].(string); exp == "" {
+		t.Errorf("no expiresAt: a key left by a failed setup would never lapse")
+	}
+
+	bearer := &Client{BaseURL: c.BaseURL, Token: token}
+	if err := bearer.DestroyAPIKey(context.Background(), id); err != nil {
+		t.Fatalf("destroy with the key as Bearer: %v", err)
+	}
+	if got := (*seen)[1]["args"].(map[string]any)["destroy"].([]any); len(got) != 1 || got[0] != "k1" {
+		t.Errorf("destroy = %v", got)
+	}
+}
+
+func TestBearerReplacesBasic(t *testing.T) {
+	c, _ := fake(t, nil)
+	c.Token = "API_wrong" // with the right password still set
+	if _, err := c.Do(context.Background(), Call{"x:Domain/query", map[string]any{}, "0"}); err == nil {
+		t.Fatal("a wrong token was accepted: the password must not be sent alongside it")
 	}
 }
