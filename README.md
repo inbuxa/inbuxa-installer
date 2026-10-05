@@ -70,6 +70,21 @@ DNS and no certificates, on a machine that starts with nothing. Without
 certificates -- which `e2e/cases/install-public.sh` proves against a private
 CA, with no internet and no public name involved.
 
+## Download
+
+Each release has static binaries for linux/amd64 and linux/arm64, and a
+SHA256SUMS to check them against:
+
+    V=v2026.10.5   # the newest: https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/latest
+    curl -fLO https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/download/$V/inbuxa-linux-amd64
+    curl -fLO https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/download/$V/SHA256SUMS
+    sha256sum --check --ignore-missing SHA256SUMS
+    install -m 755 inbuxa-linux-amd64 /usr/local/bin/inbuxa
+
+A release is a `v<year>.<month>.<day>` tag on main; `.gitea/workflows/release.yml`
+builds it with `scripts/build-release.sh`, which builds the same thing
+locally.
+
 ## Building and testing
 
     go build ./cmd/inbuxa
