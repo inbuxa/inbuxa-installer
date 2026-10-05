@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Admin is the permanent administrator bootstrap provisions.
@@ -69,6 +70,45 @@ func (c *Client) Bootstrap(ctx context.Context, hostname, domain string) (Admin,
 		return Admin{}, errors.New("x:Bootstrap/set did not return the administrator it created")
 	}
 	return a, nil
+}
+
+// CreateAPIKey gives the signed-in account an API key and returns its id and
+// the token, which the server shows only once. It expires on its own after
+// ttl, so a setup that stops halfway does not leave a working key behind.
+func (c *Client) CreateAPIKey(ctx context.Context, description string, ttl time.Duration) (id, token string, err error) {
+	args := map[string]any{"create": map[string]any{
+		"key": map[string]any{
+			"description": description,
+			"expiresAt":   time.Now().UTC().Add(ttl).Format(time.RFC3339),
+			"permissions": map[string]any{"@type": "Inherit"},
+		},
+	}}
+	rs, err := c.Do(ctx, Call{"x:ApiKey/set", args, "0"})
+	if err != nil {
+		return "", "", err
+	}
+	s, err := DecodeSet(rs[0])
+	if err != nil {
+		return "", "", err
+	}
+	var key struct {
+		ID     string `json:"id"`
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(s.Created["key"], &key); err != nil || key.ID == "" || key.Secret == "" {
+		return "", "", errors.New("x:ApiKey/set did not return the key it created")
+	}
+	return key.ID, key.Secret, nil
+}
+
+// DestroyAPIKey removes an API key from the signed-in account.
+func (c *Client) DestroyAPIKey(ctx context.Context, id string) error {
+	rs, err := c.Do(ctx, Call{"x:ApiKey/set", map[string]any{"destroy": []string{id}}, "0"})
+	if err != nil {
+		return err
+	}
+	_, err = DecodeSet(rs[0])
+	return err
 }
 
 // DomainID finds a domain by name.

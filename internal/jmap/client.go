@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-var using = []string{"urn:ietf:params:jmap:core", "urn:stalwart:jmap"}
+var using = []string{"urn:ietf:params:jmap:core", "urn:inbuxa:jmap:registry"}
 
 // Client calls one Stalwart as one account. The zero HTTP uses a client with a
 // timeout, so a hung server fails a step instead of hanging the tool.
@@ -31,7 +31,11 @@ type Client struct {
 	BaseURL  string // e.g. http://127.0.0.1:8081, no trailing slash
 	Username string
 	Password string
-	HTTP     *http.Client
+	// Token, when set, is sent as a Bearer token instead of the password.
+	// Outside bootstrap and recovery mode the server refuses HTTP Basic on
+	// /jmap (contract C-23), so a configured server takes an API key only.
+	Token string
+	HTTP  *http.Client
 }
 
 // Call is one method call in a request.
@@ -97,7 +101,11 @@ func (c *Client) Do(ctx context.Context, calls ...Call) ([]Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.SetBasicAuth(c.Username, c.Password)
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	} else {
+		req.SetBasicAuth(c.Username, c.Password)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	res, err := c.httpClient().Do(req)
 	if err != nil {

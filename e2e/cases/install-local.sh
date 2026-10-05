@@ -72,16 +72,39 @@ echo "==> the bootstrap credential did not outlive the setup"
 ENVOUT="$("$(rt)" inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$(compose ps -q server)")"
 grep -q "RECOVERY_ADMIN" <<<"$ENVOUT" && { bad "the server still carries a recovery admin"; echo "$ENVOUT" | grep RECOVERY | sed 's/^/    /'; } || ok "no recovery admin in the running server"
 grep -q "INBUXA_WEBMAIL_CLIENT_SECRET" <<<"$ENVOUT" && ok "the webmail's client secret is where it belongs" || bad "the server has no webmail client secret"
+# The setup's API key was made in a window where the server took passwords
+# on /jmap. Afterwards it must take tokens only again (contract C-23).
+grep -q "HTTP_BASIC_AUTH" <<<"$ENVOUT" && bad "the server still takes passwords everywhere" || ok "no Basic-everywhere override in the running server"
+AUSER=$(awk '/^administrator/ {print $2}' "$DIR/credentials.txt")
+APASS=$(awk '/^administrator/{getline; print $2}' "$DIR/credentials.txt")
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -u "$AUSER:$APASS" -H 'Content-Type: application/json' \
+  -d '{"using":["urn:ietf:params:jmap:core"],"methodCalls":[]}' http://127.0.0.1:8081/jmap/)
+[ "$CODE" = 401 ] && ok "the administrator's password is refused on /jmap" || bad "the administrator's password on /jmap answered $CODE, not 401"
 
 echo
 echo "==> the account it created can sign in to the webmail it installed"
 USER=$(awk '/^first mailbox/ {print $3}' "$DIR/credentials.txt")
 PASS=$(awk '/^first mailbox/{getline; print $2}' "$DIR/credentials.txt")
 [ -n "$USER" ] && ok "credentials.txt names the first mailbox ($USER)" || bad "no first mailbox in credentials.txt"
-CODE=$(curl -s -o /tmp/login.json -c /tmp/jar -w '%{http_code}' -X POST http://127.0.0.1:8080/api/auth/login \
-  -H 'Content-Type: application/json' -H 'X-Requested-With: ihasmail' \
-  -d "{\"username\":\"$USER\",\"password\":\"$PASS\",\"remember\":true}")
-[ "$CODE" = 200 ] && ok "sign-in succeeds" || { bad "sign-in answered $CODE"; head -c 200 /tmp/login.json | sed 's/^/    /'; }
+# Sign-in is the mail server's own page here too, as on a public install:
+# the server takes no password on /jmap (contract C-23). This does what a
+# browser does -- start at the webmail, post the password where the server's
+# page posts it, follow the code back -- so a pass means a person could.
+rm -f /tmp/jar
+LOC=$(curl -s -o /dev/null -c /tmp/jar -w '%{redirect_url}' "http://127.0.0.1:8080/api/auth/oauth/start?username=$USER&remember=1")
+grep -q "^http://127.0.0.1:8081/" <<<"$LOC" && ok "the webmail sends sign-in to the server's loopback address" || bad "sign-in went to '${LOC:-nowhere}'"
+grep -q "client_id=ihasmail-inbuxa" <<<"$LOC" && ok "as the first-party client" || bad "no first-party client id in '$LOC'"
+q() { sed -n "s/.*[?&]$1=\([^&]*\).*/\1/p" <<<"$LOC"; }
+urldecode() { printf '%b' "${1//%/\\x}"; }
+STATE=$(q state); CHALLENGE=$(q code_challenge); REDIRECT=$(urldecode "$(q redirect_uri)")
+ANSWER=$(curl -s -X POST http://127.0.0.1:8081/api/auth -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  -d "{\"type\":\"authCode\",\"accountName\":\"$USER\",\"accountSecret\":\"$PASS\",\"clientId\":\"ihasmail-inbuxa\",\"redirectUri\":\"$REDIRECT\",\"codeChallenge\":\"$CHALLENGE\",\"codeChallengeMethod\":\"S256\"}")
+AUTHCODE=$(sed -n 's/.*"client_\{0,1\}[cC]ode":"\([^"]*\)".*/\1/p' <<<"$ANSWER")
+[ -n "$AUTHCODE" ] && ok "the server's sign-in takes the first mailbox's password" || { bad "the server's sign-in answered"; head -c 200 <<<"$ANSWER" | sed 's/^/    /'; }
+BACK=$(curl -s -o /dev/null -b /tmp/jar -c /tmp/jar -w '%{redirect_url}' "$REDIRECT?code=$AUTHCODE&state=$STATE")
+grep -q "signin_error" <<<"$BACK" && bad "the webmail refused the code: $BACK" || ok "the webmail takes the code back"
+CODE=$(curl -s -o /tmp/login.json -b /tmp/jar -w '%{http_code}' -H 'X-Requested-With: ihasmail' http://127.0.0.1:8080/api/auth/session)
+[ "$CODE" = 200 ] && ok "sign-in succeeds" || { bad "the session answered $CODE"; head -c 200 /tmp/login.json | sed 's/^/    /'; }
 grep -q "urn:ietf:params:jmap:mail" /tmp/login.json && ok "and the session carries the mail capability" || bad "no mail capability in the session"
 
 echo

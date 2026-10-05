@@ -41,9 +41,9 @@ import (
 // here would mean this program needing a release of its own for every one of
 // theirs.
 const (
-	DefaultServerImage  = "registry.coffeylabs.org/inbuxa/inbuxa-server:2026.9.23"
-	DefaultConsoleImage = "registry.coffeylabs.org/inbuxa/inbuxa-admin:2026.9.21.2"
-	DefaultWebmailImage = "registry.coffeylabs.org/inbuxa/ihasmail-inbuxa:2026.9.22-gc2f13d6"
+	DefaultServerImage  = "registry.coffeylabs.org/inbuxa/inbuxa-server:2026.9.30.2"
+	DefaultConsoleImage = "registry.coffeylabs.org/inbuxa/inbuxa-admin:2026.9.30"
+	DefaultWebmailImage = "registry.coffeylabs.org/inbuxa/inbuxa-webmail:2026.10.5-g17a8093"
 	DefaultCaddyImage   = "docker.io/library/caddy:2-alpine"
 	DefaultSubnet       = "172.31.253.0/24"
 )
@@ -247,7 +247,46 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	}
 	log.Info("administrator %s, password in %s", admin.Username, filepath.Join(dir, "credentials.txt"))
 
+	// Once configured, the server takes a token, never a password, on /jmap
+	// (contract C-23), and the bootstrap credential no longer works; nor
+	// does anything but x:Bootstrap work before then. So the server comes up
+	// configured with Basic allowed, for this one step only, long enough for
+	// the administrator to give itself an API key with its password. The key
+	// does the rest of the setup, is removed when the setup ends, and expires
+	// within the hour anyway, so a setup that stops halfway leaves nothing
+	// that still works.
+	basicOverride := filepath.Join(os.TempDir(), "inbuxa-basic-auth.yaml")
+	if err := os.WriteFile(basicOverride, []byte(
+		"services:\n  server:\n    environment:\n      INBUXA_HTTP_BASIC_AUTH: all\n"), 0o600); err != nil {
+		return res, err
+	}
+	defer os.Remove(basicOverride)
+	log.Step("restarting the mail server configured, to give the setup an API key")
+	basic := cmp
+	basic.Files = []string{basicOverride}
+	if err := basic.Run(ctx, "up", "-d", "server"); err != nil {
+		return res, err
+	}
+	adminBasic := &jmap.Client{BaseURL: serverURL, Username: admin.Username, Password: admin.Secret}
+	var keyID, key string
+	if err := waitFor(ctx, log, "the server to come back configured", 120*time.Second, func(ctx context.Context) error {
+		var err error
+		keyID, key, err = adminBasic.CreateAPIKey(ctx, "inbuxa installer, for this setup only", time.Hour)
+		return err
+	}); err != nil {
+		return res, withLogs(ctx, fmt.Errorf("an API key for the setup: %w", err), cmp, "server")
+	}
+	srv := &jmap.Client{BaseURL: serverURL, Token: key}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if err := srv.DestroyAPIKey(ctx, keyID); err != nil {
+			log.Info("could not remove the setup's API key, which expires within the hour: %v", err)
+		}
+	}()
+
 	log.Step("starting the rest of the stack")
+	// Without the override, so the server is recreated taking tokens only.
 	// --remove-orphans: the compose file is rendered from the shapes asked
 	// for, so a component the topology no longer lists is simply not in it
 	// any more. Without this its container would keep running, belonging to
@@ -256,7 +295,6 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		return res, err
 	}
 
-	srv := &jmap.Client{BaseURL: serverURL, Username: admin.Username, Password: admin.Secret}
 	if err := waitFor(ctx, log, "the server to come back configured", 120*time.Second, func(ctx context.Context) error {
 		_, err := srv.DomainID(ctx, o.Domain)
 		return err

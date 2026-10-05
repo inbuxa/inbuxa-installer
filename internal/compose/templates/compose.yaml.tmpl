@@ -37,6 +37,12 @@ services:
       INBUXA_WEBMAIL_URL: {{.WebmailURL}}
       INBUXA_WEBMAIL_CLIENT_SECRET: ${WEBMAIL_CLIENT_SECRET:?WEBMAIL_CLIENT_SECRET is missing from .env}
 {{- end}}
+{{- if .Local}}
+      # Where a browser reaches the server, which is what its sign-in page
+      # and OAuth metadata advertise. Without it they name https://<mail
+      # host>, which a loopback-only install has nothing behind.
+      INBUXA_PUBLIC_URL: {{.ServerPublicURL}}
+{{- end}}
     networks:
       stack:
         ipv4_address: {{.ServerIP}}
@@ -80,17 +86,22 @@ services:
       SESSION_FILE: ""
       TRUST_PROXY: "1"
       IMAGE_PROXY: "1"
-{{- if not .Local}}
       # Sign-in goes through the mail server's own page, as the first-party
-      # client the server registered for this URL.
+      # client the server registered for this URL -- on --local too: the
+      # server takes a token, never a password, on /jmap (contract C-23), so
+      # a webmail that signed people in with their password would have
+      # nothing to pass it on with.
       OAUTH_CLIENT_ID: ihasmail-inbuxa
       OAUTH_CLIENT_SECRET: ${WEBMAIL_CLIENT_SECRET:?WEBMAIL_CLIENT_SECRET is missing from .env}
       PUBLIC_URL: {{.WebmailURL}}
 {{- if .ConsoleURL}}
       ADMIN_URL: {{.ConsoleURL}}
 {{- end}}
+{{- if not .Local}}
       # The server pushes changes here instead of holding a connection per
-      # tab. If it cannot reach it, every tab falls back to the relay.
+      # tab. If it cannot reach it, every tab falls back to the relay, which
+      # is what --local does: from inside the server's container, 127.0.0.1
+      # is not the webmail.
       PUSH_URL: {{.WebmailURL}}
 {{- end}}
     networks:
