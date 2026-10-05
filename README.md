@@ -85,6 +85,8 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/run.sh e2e/cases/install-public.sh  the same with real ports and certificates
     e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
     e2e/vm/run.sh e2e/cases/status-export.sh  intent against reality, and the file
+    OLD_REF=<commit> e2e/vm/run.sh e2e/cases/upgrade-volumes.sh
+                                              an install from before #5, upgraded
     e2e/vm/down.sh                            remove it
 
 Each case starts from a copy of the machine taken when it was new, so a run

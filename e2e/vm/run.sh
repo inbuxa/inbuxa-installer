@@ -27,10 +27,21 @@ vm_running || { echo "the lab is not up -- run e2e/vm/up.sh" >&2; exit 1; }
 echo "==> building the installer"
 (cd "$ROOT" && GOOS=linux GOARCH=amd64 go build -o "$LAB/inbuxa" ./cmd/inbuxa)
 
+# An upgrade case needs the installer as it was, too: OLD_REF builds that
+# commit as /tmp/inbuxa-old.
+if [ -n "${OLD_REF:-}" ]; then
+  echo "==> building the installer at $OLD_REF"
+  OLD_SRC="$(mktemp -d)"
+  (cd "$ROOT" && git archive "$OLD_REF" | tar -x -C "$OLD_SRC")
+  (cd "$OLD_SRC" && GOOS=linux GOARCH=amd64 go build -o "$LAB/inbuxa-old" ./cmd/inbuxa)
+  rm -rf "$OLD_SRC"
+fi
+
 echo "==> copying it in"
 vm_scp "$LAB/inbuxa" lab@127.0.0.1:/tmp/inbuxa >/dev/null
+[ -z "${OLD_REF:-}" ] || vm_scp "$LAB/inbuxa-old" lab@127.0.0.1:/tmp/inbuxa-old >/dev/null
 vm_scp "$ROOT/$CASE" lab@127.0.0.1:/tmp/case.sh >/dev/null
-vm_ssh 'chmod +x /tmp/inbuxa /tmp/case.sh'
+vm_ssh 'chmod +x /tmp/inbuxa /tmp/case.sh; [ ! -f /tmp/inbuxa-old ] || chmod +x /tmp/inbuxa-old'
 
 echo "==> running $(basename "$CASE")"
 vm_ssh 'sudo -E bash /tmp/case.sh'
