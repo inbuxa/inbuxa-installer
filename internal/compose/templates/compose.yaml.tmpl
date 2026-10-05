@@ -20,8 +20,10 @@ services:
       - "{{.}}:{{.}}"
 {{- end}}
     volumes:
-      - inbuxa-etc:/opt/stalwart/etc
-      - inbuxa-data:/opt/stalwart/data
+      # Where the image keeps its configuration and its data. Installs made
+      # before this was corrected are moved over on their next run.
+      - inbuxa-etc:/etc/inbuxa
+      - inbuxa-data:/var/lib/inbuxa
 {{- if .CABundle}}
       # The system roots plus the private ACME CA, so the server can reach it.
       - ./ca-bundle.crt:/etc/ssl/certs/ca-certificates.crt:ro

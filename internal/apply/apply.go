@@ -458,9 +458,31 @@ func converge(ctx context.Context, o plan.Options, stack compose.Stack, cmp dock
 		}
 	}
 
+	// Before anything is recreated: an install from before #5 keeps the
+	// server's data where the corrected compose file no longer mounts it.
+	moved, err := adoptServerVolumes(ctx, cmp, stack.Project, log)
+	if err != nil {
+		return res, err
+	}
+
 	log.Step("bringing the stack in line with the file")
 	if err := cmp.Run(ctx, "up", "-d", "--remove-orphans"); err != nil {
 		return res, withLogs(ctx, err, cmp, "server")
+	}
+	if moved {
+		// A server that finds no configuration starts in bootstrap mode and
+		// says so. That would mean the move missed something; the old
+		// volumes are still there to put back.
+		if err := waitFor(ctx, log, "the server to come back on its named volumes", 120*time.Second, func(ctx context.Context) error {
+			return live(ctx, "http://"+stack.ServerBind)
+		}); err != nil {
+			return res, withLogs(ctx, err, cmp, "server")
+		}
+		if strings.Contains(cmp.Logs(ctx, "server", 400), "bootstrap mode") {
+			return res, fmt.Errorf("the server came back in bootstrap mode after its data was moved; " +
+				"its previous volumes are untouched, see `docker volume ls` and issue #5")
+		}
+		log.Info("the server came back with its configuration")
 	}
 
 	// The server reads the front-end URLs from its environment, so a front
