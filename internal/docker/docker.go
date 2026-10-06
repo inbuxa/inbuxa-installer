@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Coffey Labs
+// SPDX-FileCopyrightText: 2026 Coffey Labs LLC
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package docker drives the docker CLI. The CLI rather than the Engine API,

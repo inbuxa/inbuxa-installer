@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Coffey Labs
+# SPDX-FileCopyrightText: 2026 Coffey Labs LLC
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Shared by the four scripts beside it: how the lab machine is started,

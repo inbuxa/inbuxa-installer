@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Coffey Labs
+// SPDX-FileCopyrightText: 2026 Coffey Labs LLC
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Command inbuxa installs the inbuxa suite on the machine it is run on.
