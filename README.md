@@ -2,7 +2,7 @@
 
 > [!NOTE]
 > Development happens on [git.coffeylabs.org/inbuxa/inbuxa-installer](https://git.coffeylabs.org/inbuxa/inbuxa-installer); the copy on GitHub is a read-only mirror.
-> Report issues at **[git.coffeylabs.org/inbuxa/inbuxa-installer/issues](https://git.coffeylabs.org/inbuxa/inbuxa-installer/issues)**, and join discussions at **[community.coffeylabs.org](https://community.coffeylabs.org)**.
+> Report issues at **[git.coffeylabs.org/inbuxa/inbuxa-installer/issues](https://git.coffeylabs.org/inbuxa/inbuxa-installer/issues)**, join discussions at **[community.coffeylabs.org](https://community.coffeylabs.org)**, or chat on **[Discord](https://discord.gg/nqcY4TKfAn)**.
 
 One program that installs the **inbuxa** suite on the machine you run it on:
 the mail server, the administration console and the webmail, each as a
