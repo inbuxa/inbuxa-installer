@@ -1,0 +1,52 @@
+# Written by the inbuxa installer {{.Version}} for {{.Domain}}.
+#
+# For the web server already on this machine: Caddy. Import it from your
+# Caddyfile (`import {{.Dir}}/proxy/Caddyfile.fragment`) and reload. It has no
+# global options block, so it can sit beside your own sites. The installer
+# loads nothing and restarts nothing.
+#
+# Everything is passed to loopback: 8081 the mail server, 8082 the console,
+# 8080 the webmail. Caddy gets certificates for the console and the webmail
+# itself.
+{{- if .ServesServer}}
+
+# The mail server's names. Caddy uses TLS-ALPN-01 for them and leaves HTTP-01
+# on port 80 to the mail server, which needs a certificate of its own for
+# IMAP and SMTP: so neither answers the other's challenge.
+{{join .ServerNames ", "}} {
+	tls {
+		issuer acme {
+			email {{.Email}}
+			disable_http_challenge
+		}
+	}
+	reverse_proxy 127.0.0.1:8081 {
+		flush_interval -1
+	}
+}
+
+{{range $i, $n := .ServerNames}}{{if $i}}, {{end}}http://{{$n}}{{end}} {
+	handle /.well-known/acme-challenge/* {
+		reverse_proxy 127.0.0.1:8081
+	}
+	handle {
+		redir https://{host}{uri} 308
+	}
+}
+{{- end}}
+{{- if .Console}}
+
+{{.ConsoleHost}} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8082
+}
+{{- end}}
+{{- if .Webmail}}
+
+{{.WebmailHost}} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080 {
+		flush_interval -1
+	}
+}
+{{- end}}

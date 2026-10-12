@@ -226,6 +226,9 @@ func install(args []string) int {
 	if res.ZoneFile != "" {
 		fmt.Printf("  dns records    %s\n", res.ZoneFile)
 	}
+	if res.ProxyConfig != "" {
+		fmt.Printf("  proxy config   %s (load it into your web server)\n", res.ProxyConfig)
+	}
 	if len(problems) > 0 {
 		return 1
 	}

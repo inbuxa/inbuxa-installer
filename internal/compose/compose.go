@@ -66,6 +66,7 @@ type Stack struct {
 	WebmailBind string
 
 	Subnet    string
+	GatewayIP string // the project network's gateway: where the host is, seen from inside it
 	ServerIP  string
 	ConsoleIP string
 	WebmailIP string
@@ -82,6 +83,10 @@ type Stack struct {
 	ACMEDirectory string
 	ACMECARoot    string
 	CABundle      bool
+
+	// Dir is the deployment directory, which the proxy configuration for
+	// the operator's own web server names.
+	Dir string
 }
 
 // ServerNames is every name the server's certificate and the proxy need:
@@ -120,6 +125,7 @@ func (s *Stack) Addresses() error {
 		}
 		return a.String()
 	}
+	s.GatewayIP = at(1)
 	s.ServerIP, s.ConsoleIP, s.WebmailIP, s.CaddyIP = at(10), at(11), at(12), at(13)
 	if s.ServerIP == "" || s.CaddyIP == "" {
 		return fmt.Errorf("subnet %q is too small for the stack", s.Subnet)
@@ -297,4 +303,36 @@ func secret() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// ProxySnippets are the files --proxy snippets writes, for the web server the
+// operator already runs: an nginx configuration and a Caddyfile fragment.
+var ProxySnippets = map[string]string{
+	"nginx-inbuxa.conf.tmpl":  "nginx-inbuxa.conf",
+	"Caddyfile.fragment.tmpl": "Caddyfile.fragment",
+}
+
+// WriteProxySnippets writes them into dir/proxy and returns that directory.
+// Nothing is loaded or reloaded: that web server is the operator's.
+func WriteProxySnippets(dir string, s Stack) (string, error) {
+	out := filepath.Join(dir, "proxy")
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return "", err
+	}
+	s.Dir = dir
+	funcs := template.FuncMap{"join": strings.Join}
+	for name, file := range ProxySnippets {
+		t, err := template.New(name).Funcs(funcs).ParseFS(templates, "templates/"+name)
+		if err != nil {
+			return "", err
+		}
+		var b strings.Builder
+		if err := t.Execute(&b, s); err != nil {
+			return "", fmt.Errorf("%s: %w", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(out, file), []byte(b.String()), 0o644); err != nil {
+			return "", err
+		}
+	}
+	return out, nil
 }
