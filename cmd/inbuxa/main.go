@@ -9,11 +9,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,6 +37,8 @@ var version = "dev"
 const usage = `inbuxa -- install the inbuxa suite on this machine
 
   inbuxa install [flags]     install or converge (no flags: the interface)
+  inbuxa join URL [flags]    the console and the webmail here, for a server
+                             already running at URL
   inbuxa survey              what this machine is, as the installer sees it
   inbuxa deps [--install]    what is missing for a shape, and fix it
   inbuxa plan -f FILE        what a topology file would change here
@@ -62,6 +66,21 @@ install flags:
                              machine lacks, rather than refusing over it
   --dry-run                  print the plan and stop
   --yes                      do not ask for confirmation
+
+join flags:
+  --key KEY                  an API key made in the console by a server
+                             administrator; "-" reads it from standard input.
+                             INBUXA_JOIN_KEY works too, and keeps it out of
+                             the shell's history
+  --console SHAPE            container | skip   (default: container)
+  --webmail SHAPE            container | skip   (default: container)
+  --domain NAME              default: the server's name without its first label
+  --console-host, --webmail-host, --email, --proxy, --dir, --local,
+  --install-deps, --dry-run, --yes   as for install
+  --replace                  put these front ends in place of others the
+                             server already lists
+  --exempt-address IP        the address the server sees the webmail at, when
+                             it is not what the webmail's name resolves to
 
 deps flags:
   --server/--console/--webmail SHAPE   the shapes to work out the needs for
@@ -93,6 +112,8 @@ func main() {
 	switch os.Args[1] {
 	case "install":
 		os.Exit(install(os.Args[2:]))
+	case "join":
+		os.Exit(join(os.Args[2:]))
 	case "survey":
 		os.Exit(survey())
 	case "deps":
@@ -182,7 +203,7 @@ func install(args []string) int {
 		return 1
 	}
 	fmt.Println("\nChecking it works:")
-	problems := apply.Verify(context.Background(), res,
+	problems := apply.Verify(context.Background(), res, true,
 		o.Shape(plan.Console) != plan.Skip, o.Shape(plan.Webmail) != plan.Skip, log)
 	for _, why := range problems {
 		fmt.Fprintln(os.Stderr, "  problem: "+why)
@@ -206,6 +227,133 @@ func install(args []string) int {
 	if res.ZoneFile != "" {
 		fmt.Printf("  dns records    %s\n", res.ZoneFile)
 	}
+	if len(problems) > 0 {
+		return 1
+	}
+	return 0
+}
+
+// join installs the front ends here for a server elsewhere. The server is
+// reached only over its own HTTPS, with an API key, never over SSH.
+func join(args []string) int {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(os.Stderr, "which server? inbuxa join https://mail.example.com --key ...")
+		return 2
+	}
+	serverURL := strings.TrimRight(args[0], "/")
+	if !strings.HasPrefix(serverURL, "https://") && !strings.HasPrefix(serverURL, "http://") {
+		serverURL = "https://" + serverURL
+	}
+	fs := flag.NewFlagSet("join", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	var (
+		o       plan.Options
+		key     = fs.String("key", os.Getenv("INBUXA_JOIN_KEY"), "")
+		console = fs.String("console", "container", "")
+		webmail = fs.String("webmail", "container", "")
+		dryRun  = fs.Bool("dry-run", false, "")
+		yes     = fs.Bool("yes", false, "")
+	)
+	fs.StringVar(&o.Domain, "domain", "", "")
+	fs.StringVar(&o.ConsoleHost, "console-host", "", "")
+	fs.StringVar(&o.WebmailHost, "webmail-host", "", "")
+	fs.StringVar(&o.ACMEEmail, "email", "", "")
+	fs.StringVar(&o.Proxy, "proxy", "", "")
+	fs.StringVar(&o.Dir, "dir", "", "")
+	fs.BoolVar(&o.Local, "local", false, "")
+	fs.BoolVar(&o.InstallDeps, "install-deps", false, "")
+	fs.BoolVar(&o.Replace, "replace", false, "")
+	fs.StringVar(&o.ExemptAddress, "exempt-address", "", "")
+	fs.StringVar(&o.ACMEDirectory, "acme-directory", "", "")
+	fs.StringVar(&o.ACMECARoot, "acme-ca-root", "", "")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if *key == "-" {
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil && line == "" {
+			fmt.Fprintln(os.Stderr, "reading the key from standard input: "+err.Error())
+			return 2
+		}
+		*key = strings.TrimSpace(line)
+	}
+	if *key == "" {
+		fmt.Fprintln(os.Stderr, "an API key is needed: make one in the console (your account, API keys) and pass it with --key or INBUXA_JOIN_KEY")
+		return 2
+	}
+	o.ServerURL = serverURL
+	if o.Domain == "" {
+		host := strings.TrimPrefix(strings.TrimPrefix(serverURL, "https://"), "http://")
+		host = strings.SplitN(strings.SplitN(host, "/", 2)[0], ":", 2)[0]
+		// A name gives its domain; an address gives none, and --domain
+		// (or --local) is needed then.
+		if net.ParseIP(host) == nil {
+			if _, rest, ok := strings.Cut(host, "."); ok && strings.Contains(rest, ".") {
+				o.Domain = rest
+			} else {
+				o.Domain = host
+			}
+		}
+	}
+	o.Choices = append(o.Choices, plan.Choice{Component: plan.Server, Shape: plan.Skip})
+	for _, c := range []struct {
+		comp plan.Component
+		val  string
+	}{{plan.Console, *console}, {plan.Webmail, *webmail}} {
+		s, err := shape(c.val)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "--%s: %v\n", c.comp, err)
+			return 2
+		}
+		o.Choices = append(o.Choices, plan.Choice{Component: c.comp, Shape: s})
+	}
+
+	ctx := context.Background()
+	f := host.Survey(ctx)
+	p, err := plan.Build(f, o)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cannot join as asked: "+err.Error())
+		return 1
+	}
+	fmt.Print(p.String())
+	// The server is asked even on a dry run: it changes nothing, and a key
+	// that doesn't work or a front end it would replace is worth knowing
+	// before anything else.
+	fmt.Printf("\nAsking %s:\n", serverURL)
+	if err := apply.JoinCheck(ctx, p.Options, *key); err != nil {
+		fmt.Fprintln(os.Stderr, "  "+err.Error())
+		return 1
+	}
+	fmt.Println("  the key works, and the server can take these front ends")
+	if *dryRun {
+		return 0
+	}
+	if !*yes {
+		fmt.Fprintln(os.Stderr, "\nNothing has happened yet. Pass --yes to carry this out.")
+		return 1
+	}
+
+	fmt.Println("\nApplying:")
+	log := &printer{}
+	res, err := apply.Join(ctx, p, f, *key, log)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
+		return 1
+	}
+	fmt.Println("\nChecking it works:")
+	problems := apply.JoinVerify(ctx, res,
+		p.Options.Shape(plan.Console) != plan.Skip, p.Options.Shape(plan.Webmail) != plan.Skip, log)
+	for _, why := range problems {
+		fmt.Fprintln(os.Stderr, "  problem: "+why)
+	}
+	fmt.Printf("\nDone. %s, joined to %s\n", res.Dir, serverURL)
+	if res.ConsoleURL != "" {
+		fmt.Printf("  console        %s\n", res.ConsoleURL)
+	}
+	if res.WebmailURL != "" {
+		fmt.Printf("  webmail        %s\n", res.WebmailURL)
+	}
+	fmt.Println("  The API key is not kept here; you can remove it in the console now.")
 	if len(problems) > 0 {
 		return 1
 	}

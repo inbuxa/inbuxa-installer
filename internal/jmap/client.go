@@ -89,6 +89,10 @@ func (c *Client) httpClient() *http.Client {
 // before it -- JMAP stops nothing on an error, but every caller here needs
 // all of its calls to have worked.
 func (c *Client) Do(ctx context.Context, calls ...Call) ([]Response, error) {
+	return c.do(ctx, using, calls...)
+}
+
+func (c *Client) do(ctx context.Context, using []string, calls ...Call) ([]Response, error) {
 	mc := make([][3]any, len(calls))
 	for i, call := range calls {
 		mc[i] = [3]any{call.Method, call.Args, call.ID}

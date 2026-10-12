@@ -70,6 +70,16 @@ type Options struct {
 	ACMEDirectory string
 	ACMECARoot    string
 
+	// ServerURL is a mail server on another machine that the front ends here
+	// are joined to (`inbuxa join`); empty when the server is installed here.
+	ServerURL string
+	// Replace lets join put its front ends in place of others the server
+	// already lists.
+	Replace bool
+	// ExemptAddress is the address the server sees the webmail's requests
+	// come from, when it is not what the webmail's name resolves to.
+	ExemptAddress string
+
 	// Where this came from, when it came from a topology file: the machine's
 	// name in it, and the path, both recorded in the state file so a later
 	// run knows which part of which file this machine is.
@@ -391,6 +401,19 @@ func Build(f host.Facts, o Options) (Plan, error) {
 		}
 	}
 
+	if o.ServerURL != "" {
+		detail := []string{"the server at " + o.ServerURL + ", with the API key given"}
+		if o.Shape(Console) != Skip {
+			detail = append(detail, "the console's address, which registers its OAuth client and allows its origin")
+		}
+		if o.Shape(Webmail) != Skip {
+			detail = append(detail,
+				"the webmail's address and a client secret generated here, kept in "+o.Dir+"/.env",
+				"this machine's address exempted from the server's auto-ban, as every webmail request comes from it")
+		}
+		p.Steps = append(p.Steps, Step{Title: "Register these front ends with the server (inbuxa:FrontEnds)", Detail: detail})
+	}
+
 	p.Steps = append(p.Steps, Step{
 		Title: "Check it works",
 		Detail: []string{
@@ -514,6 +537,9 @@ func describe(o Options) string {
 	where := o.Domain
 	if o.Local {
 		where = "a loopback evaluation"
+	}
+	if o.ServerURL != "" {
+		where += ", joined to " + o.ServerURL
 	}
 	return strings.Join(parts, ", ") + " -- " + where
 }

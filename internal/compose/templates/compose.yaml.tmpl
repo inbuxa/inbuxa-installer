@@ -4,7 +4,11 @@
 # from this directory. Secrets are in .env beside it and the administrator's
 # password is in credentials.txt -- both readable only by root.
 #
-{{- if .HostServer}}
+{{- if .RemoteServerURL}}
+# The mail server is on another machine, {{.RemoteServerURL}}; these front
+# ends were joined to it with `inbuxa join`, which registered their addresses
+# with it. Nothing here holds mail.
+{{- else if .HostServer}}
 # The mail server runs on this machine under systemd (inbuxa-server.service),
 # not in this project. Its plain HTTP is on loopback only, which is why the
 # webmail and Caddy share the host's network: that is where they reach it, as
@@ -91,21 +95,20 @@ services:
     # signs everyone out; nothing else is lost, because nothing else is kept.
     read_only: true
     tmpfs: [/tmp]
-{{- if .HostServer}}
-    # On the host's network, listening on loopback only, beside the server.
+{{- if .WebmailOnHost}}
+    # On the host's network, listening on loopback only, where it reaches
+    # the server.
     network_mode: host
 {{- else}}
     ports:
       - "{{.WebmailBind}}:8080"
 {{- end}}
     environment:
-{{- if .HostServer}}
+{{- if .WebmailOnHost}}
       HOST: 127.0.0.1
       PORT: "8080"
-      MAIL_SERVER_URL: http://127.0.0.1:8081
-{{- else}}
-      MAIL_SERVER_URL: http://server:8080
 {{- end}}
+      MAIL_SERVER_URL: {{.WebmailServerURL}}
       APP_SECRET: ${APP_SECRET:?APP_SECRET is missing from .env}
       APP_NAME: inbuxa
       IMMUTABLE: "1"
@@ -130,7 +133,7 @@ services:
       # is not the webmail.
       PUSH_URL: {{.WebmailURL}}
 {{- end}}
-{{- if not .HostServer}}
+{{- if not .WebmailOnHost}}
     networks:
       stack:
         ipv4_address: {{.WebmailIP}}
@@ -167,7 +170,7 @@ services:
         ipv4_address: {{.CaddyIP}}
 {{- end}}
 {{- end}}
-{{- if or .Server .Console}}
+{{- if or .Server .Console (and .Webmail (not .WebmailOnHost)) (and .Proxy (not .HostServer))}}
 
 networks:
   stack:

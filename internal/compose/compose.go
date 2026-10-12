@@ -51,6 +51,11 @@ type Stack struct {
 	// only the browser talks to the server from it.
 	HostServer bool
 
+	// RemoteServerURL is a mail server on another machine, which the front
+	// ends here were joined to (`inbuxa join`). Nothing here serves its
+	// names; the webmail reaches it at this address.
+	RemoteServerURL string
+
 	ServerImage  string
 	ConsoleImage string
 	WebmailImage string
@@ -145,6 +150,8 @@ func Write(dir string, s *Stack) (Secrets, error) {
 		// arrives from loopback, which is the address the server is told to
 		// exempt from the auto-ban.
 		s.WebmailIP, s.CaddyIP = "127.0.0.1", "127.0.0.1"
+	} else if s.WebmailOnHost() {
+		s.WebmailIP = "127.0.0.1"
 	}
 
 	funcs := template.FuncMap{"join": strings.Join}
@@ -214,6 +221,45 @@ func (s Stack) Empty() bool {
 func (s Stack) ServerUpstream() string  { return s.pick("server:8080", "127.0.0.1:8081") }
 func (s Stack) WebmailUpstream() string { return s.pick("webmail:8080", "127.0.0.1:8080") }
 func (s Stack) ConsoleUpstream() string { return s.pick("console:8080", "127.0.0.1:8082") }
+
+// WebmailOnHost is whether the webmail shares the host's network: beside a
+// server on the host, or joined to one that is only on this machine's
+// loopback, which a container on the project network could not reach.
+func (s Stack) WebmailOnHost() bool {
+	return s.HostServer || (s.RemoteServerURL != "" && isLoopback(s.RemoteServerURL))
+}
+
+// WebmailServerURL is where the webmail finds the mail server.
+func (s Stack) WebmailServerURL() string {
+	switch {
+	case s.HostServer:
+		return "http://127.0.0.1:8081"
+	case s.RemoteServerURL != "":
+		return strings.TrimRight(s.RemoteServerURL, "/")
+	}
+	return "http://server:8080"
+}
+
+// ServesServer is whether Caddy here serves the mail server's names: not when
+// the server is on another machine, whose own proxy does.
+func (s Stack) ServesServer() bool { return s.Server || s.HostServer }
+
+func isLoopback(url string) bool {
+	host := url
+	if i := strings.Index(host, "://"); i >= 0 {
+		host = host[i+3:]
+	}
+	host = strings.SplitN(host, "/", 2)[0]
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 func (s Stack) pick(project, host string) string {
 	if s.HostServer {
