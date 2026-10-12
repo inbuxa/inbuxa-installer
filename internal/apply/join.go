@@ -86,11 +86,6 @@ func Join(ctx context.Context, p plan.Plan, f host.Facts, key string, log Log) (
 	if o.Shape(plan.Server) != plan.Skip {
 		return nil, errors.New("join installs front ends for a server elsewhere; the server itself is installed with install")
 	}
-	for _, c := range []plan.Component{plan.Console, plan.Webmail} {
-		if o.Shape(c) == plan.Host {
-			return nil, fmt.Errorf("join installs the console and the webmail in containers for now: %s was asked for as a host install", c)
-		}
-	}
 	if o.Shape(plan.Console) == plan.Skip && o.Shape(plan.Webmail) == plan.Skip {
 		return nil, errors.New("nothing to join: both the console and the webmail are skipped")
 	}
@@ -116,8 +111,13 @@ func Join(ctx context.Context, p plan.Plan, f host.Facts, key string, log Log) (
 		}
 		f = host.Survey(ctx)
 	}
-	if !f.Runtime.Usable {
-		return nil, fmt.Errorf("the front ends run in containers, and containers are not usable here: %s", f.Runtime.Why)
+	// Containers only for what runs in one: a front end in a container, or
+	// the managed Caddy. The console as files and the webmail under systemd,
+	// behind your own web server, need none.
+	needContainers := o.Shape(plan.Console) == plan.Container || o.Shape(plan.Webmail) == plan.Container ||
+		(!o.Local && o.Proxy == "caddy")
+	if needContainers && !f.Runtime.Usable {
+		return nil, fmt.Errorf("what runs in containers here can't: %s", f.Runtime.Why)
 	}
 
 	consoleURL, webmailURL := joinURLs(o)
@@ -131,6 +131,7 @@ func Join(ctx context.Context, p plan.Plan, f host.Facts, key string, log Log) (
 		WebmailHost:     o.WebmailHost,
 		Console:         o.Shape(plan.Console) == plan.Container,
 		Webmail:         o.Shape(plan.Webmail) == plan.Container,
+		WebmailUnit:     o.Shape(plan.Webmail) == plan.Host,
 		Proxy:           !o.Local && o.Proxy == "caddy",
 		RemoteServerURL: o.ServerURL,
 		ServerPublicURL: o.ServerURL,
@@ -142,10 +143,13 @@ func Join(ctx context.Context, p plan.Plan, f host.Facts, key string, log Log) (
 		Subnet:          DefaultSubnet,
 		ACMEDirectory:   o.ACMEDirectory,
 	}
-	if stack.Console {
+	if o.Shape(plan.Console) != plan.Skip {
 		stack.ConsoleURL = consoleURL
 	}
-	if stack.Webmail {
+	if o.Shape(plan.Console) == plan.Host {
+		stack.ConsoleFiles = hostConsole{deploy: o.Dir}.dir()
+	}
+	if o.Shape(plan.Webmail) != plan.Skip {
 		stack.WebmailURL = webmailURL
 	}
 	if o.ACMECARoot != "" {
@@ -156,25 +160,62 @@ func Join(ctx context.Context, p plan.Plan, f host.Facts, key string, log Log) (
 	}
 
 	log.Step("writing the deployment into %s", o.Dir)
-	sec, err := compose.Write(o.Dir, &stack)
-	if err != nil {
-		return nil, err
+	var sec compose.Secrets
+	if stack.Empty() {
+		if sec, err = compose.EnsureSecrets(o.Dir); err != nil {
+			return nil, err
+		}
+		log.Info(".env (nothing runs in containers here)")
+	} else {
+		if sec, err = compose.Write(o.Dir, &stack); err != nil {
+			return nil, err
+		}
+		log.Info("compose.yaml, .env%s", map[bool]string{true: " and Caddyfile", false: ""}[stack.Proxy])
 	}
-	log.Info("compose.yaml, .env%s", map[bool]string{true: " and Caddyfile", false: ""}[stack.Proxy])
 
 	docker.UseRuntime(f.Runtime)
 	cmp := docker.Compose{Dir: o.Dir, Runtime: f.Runtime}
-	log.Step("fetching the images")
-	if err := cmp.Run(ctx, "pull", "--quiet"); err != nil {
-		return nil, err
+	if !stack.Empty() {
+		log.Step("fetching the images")
+		if err := cmp.Run(ctx, "pull", "--quiet"); err != nil {
+			return nil, err
+		}
+	}
+
+	// On the host: the console's files, pointed at the server, and the
+	// webmail's, with its unit and an environment naming the server. Both
+	// in place before the server is told about them, so nothing it lists
+	// is missing here.
+	if o.Shape(plan.Console) == plan.Host {
+		if err := (hostConsole{deploy: o.Dir, log: log}).Install(ctx, o.ServerURL); err != nil {
+			return nil, err
+		}
+	}
+	var hw *hostWebmail
+	if o.Shape(plan.Webmail) == plan.Host {
+		hw = &hostWebmail{deploy: o.Dir, log: log}
+		if err := hw.Install(ctx); err != nil {
+			return nil, err
+		}
+		if _, err := hw.WriteEnv(webmailEnv(o, stack, sec, hw.Version())); err != nil {
+			return nil, err
+		}
+	}
+	var proxyConfig string
+	if !o.Local && o.Proxy == "snippets" {
+		log.Step("writing the configuration for your web server")
+		if proxyConfig, err = compose.WriteProxySnippets(o.Dir, stack); err != nil {
+			return nil, fmt.Errorf("writing the proxy configuration: %w", err)
+		}
+		log.Info("%s/nginx-inbuxa.conf and %s/Caddyfile.fragment: load one into your web server", proxyConfig, proxyConfig)
 	}
 
 	log.Step("registering these front ends with the server")
 	update := map[string]any{}
-	if stack.Console {
+	if stack.ConsoleURL != "" {
 		update["adminUrl"] = consoleURL
 	}
-	if stack.Webmail {
+	if stack.WebmailURL != "" {
 		update["webmailUrl"] = webmailURL
 		update["webmailClientSecret"] = sec.WebmailOAuth
 	}
@@ -190,7 +231,7 @@ func Join(ctx context.Context, p plan.Plan, f host.Facts, key string, log Log) (
 	// Every webmail request reaches the server from one address, this
 	// machine's, and the server bans per address: exempted, a scanner
 	// probing the webmail can't take everybody's webmail with it.
-	if stack.Webmail {
+	if stack.WebmailURL != "" {
 		addresses := joinExemptAddresses(ctx, o, stack)
 		if len(addresses) == 0 {
 			log.Info("could not tell which address the server sees the webmail at; exempt it with --exempt-address, or in the console under the auto-ban's allowed addresses")
@@ -210,8 +251,15 @@ func Join(ctx context.Context, p plan.Plan, f host.Facts, key string, log Log) (
 	}
 
 	log.Step("starting the front ends")
-	if err := cmp.Run(ctx, "up", "-d", "--remove-orphans"); err != nil {
-		return nil, err
+	if !stack.Empty() {
+		if err := cmp.Run(ctx, "up", "-d", "--remove-orphans"); err != nil {
+			return nil, err
+		}
+	}
+	if hw != nil {
+		if err := hw.Start(ctx); err != nil {
+			return nil, withLogs(ctx, err, hw, "webmail")
+		}
 	}
 
 	st, err := state.Load()
@@ -221,10 +269,11 @@ func Join(ctx context.Context, p plan.Plan, f host.Facts, key string, log Log) (
 	}
 
 	return &Result{
-		Dir:        o.Dir,
-		ConsoleURL: stack.ConsoleURL,
-		WebmailURL: stack.WebmailURL,
-		ServerURL:  o.ServerURL,
+		Dir:         o.Dir,
+		ConsoleURL:  stack.ConsoleURL,
+		WebmailURL:  stack.WebmailURL,
+		ServerURL:   o.ServerURL,
+		ProxyConfig: proxyConfig,
 	}, nil
 }
 
@@ -252,14 +301,14 @@ func joinExemptAddresses(ctx context.Context, o plan.Options, stack compose.Stac
 // JoinVerify is join's last step: the front ends answer here, and the server
 // lets the console call it from the browser, which is the part only the
 // server can say.
-func JoinVerify(ctx context.Context, res *Result, console, webmail bool, log Log) []string {
+func JoinVerify(ctx context.Context, res *Result, console, webmail plan.Shape, log Log) []string {
 	// Started a moment ago: give them the time to answer at all before
 	// asking whether they answer correctly.
 	for _, c := range []struct {
 		want bool
 		what string
 		url  string
-	}{{console, "the console", "http://127.0.0.1:8082/"}, {webmail, "the webmail", "http://127.0.0.1:8080/api/health"}} {
+	}{{console == plan.Container, "the console", "http://127.0.0.1:8082/"}, {webmail != plan.Skip, "the webmail", "http://127.0.0.1:8080/api/health"}} {
 		if !c.want {
 			continue
 		}
@@ -277,11 +326,11 @@ func JoinVerify(ctx context.Context, res *Result, console, webmail bool, log Log
 		})
 	}
 	o := plan.Options{Dir: res.Dir, Choices: []plan.Choice{
-		{Component: plan.Console, Shape: map[bool]plan.Shape{true: plan.Container, false: plan.Skip}[console]},
-		{Component: plan.Webmail, Shape: map[bool]plan.Shape{true: plan.Container, false: plan.Skip}[webmail]},
+		{Component: plan.Console, Shape: console},
+		{Component: plan.Webmail, Shape: webmail},
 	}}
 	problems := Verify(ctx, res, o, false, log)
-	if console {
+	if console != plan.Skip {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodOptions, res.ServerURL+"/jmap/session", nil)

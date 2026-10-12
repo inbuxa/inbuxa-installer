@@ -82,15 +82,28 @@ func SurveyText(f host.Facts) string {
 	for _, c := range []Component{Server, Console, Webmail} {
 		var shapes []string
 		for _, s := range []Shape{Container, Host} {
-			if a := Available(f, c, s); a.OK {
+			switch a := Available(f, c, s); {
+			case a.OK:
 				shapes = append(shapes, string(s))
-			} else {
+			case fixable(f, c, s):
+				// Missing, not impossible: what --install-deps adds, said as
+				// the offer it is, as the interface says it.
+				shapes = append(shapes, fmt.Sprintf("%s (with --install-deps: %s)", s, a.Why))
+			default:
 				shapes = append(shapes, fmt.Sprintf("%s (no: %s)", s, a.Why))
 			}
 		}
 		fmt.Fprintf(&b, "  %-10s %s\n", c, strings.Join(shapes, "   "))
 	}
 	return b.String()
+}
+
+// fixable is whether a shape this machine can't take as it is becomes one it
+// can once the installer adds what is missing: a plan with --install-deps
+// builds.
+func fixable(f host.Facts, c Component, s Shape) bool {
+	_, err := Build(f, Options{Domain: "example.com", InstallDeps: true, Choices: []Choice{{Component: c, Shape: s}}})
+	return err == nil
 }
 
 func yes(b bool, t, f string) string {

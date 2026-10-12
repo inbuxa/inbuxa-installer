@@ -101,8 +101,9 @@ This is early. What is built:
   call the server from the browser, with no restart and nothing changed on
   that machine by hand. It asks first, dry runs included, and refuses with
   the reason when the key is wrong, the server is too old, or it already
-  lists other front ends (`--replace` to put these in their place). Needs a
-  server release 2026.10.12.1 or newer.
+  lists other front ends (`--replace` to put these in their place). Each
+  front end goes in a container or on the host (`--console host`, `--webmail
+  host`), as with `install`. Needs a server release 2026.10.12.1 or newer.
 
 - **`plan -f` / `apply -f` / `export`** -- a whole installation described in
   one file, however many machines. Each machine acts on its own part and
@@ -149,9 +150,8 @@ This is early. What is built:
   installing. It exits non-zero when they disagree, so a machine can be
   asked in a script whether it still matches itself.
 
-Not built yet: `join` in the interface (it is a command for now) and of
-front ends on the host, and moving the server between a container
-and the host. The design is in the inbuxa specification (§6.1 and
+Not built yet: `join` in the interface (it is a command for now), and
+moving the server between a container and the host. The design is in the inbuxa specification (§6.1 and
 the installer draft); the phases are there too.
 
     inbuxa install --local --domain example.test --install-deps --yes
@@ -192,6 +192,7 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/run.sh e2e/cases/install-public.sh  the same with real ports and certificates
     e2e/vm/run.sh e2e/cases/install-host.sh    the server on the host, the rest beside it
     e2e/vm/run.sh e2e/cases/join.sh           front ends joined to a server elsewhere
+    e2e/vm/run.sh e2e/cases/join-host.sh      the same on the host, behind nginx, no containers
     e2e/vm/run.sh e2e/cases/interface.sh      the interface, driven key by key in a terminal
     e2e/vm/run.sh e2e/cases/proxy-snippets.sh  behind nginx, from the configuration it writes
     e2e/vm/run.sh e2e/cases/webmail-host.sh    the webmail on the host, and signing in to it
