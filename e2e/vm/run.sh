@@ -39,6 +39,12 @@ fi
 
 echo "==> copying it in"
 vm_scp "$LAB/inbuxa" lab@127.0.0.1:/tmp/inbuxa >/dev/null
+# A server build to install instead of the release (INBUXA_SERVER_BINARY in
+# the case), for testing a server change before it is released.
+if [ -n "${SERVER_BINARY:-}" ]; then
+  vm_scp "$SERVER_BINARY" lab@127.0.0.1:/tmp/inbuxa-server-test >/dev/null
+  vm_ssh 'chmod +x /tmp/inbuxa-server-test'
+fi
 [ -z "${OLD_REF:-}" ] || vm_scp "$LAB/inbuxa-old" lab@127.0.0.1:/tmp/inbuxa-old >/dev/null
 vm_scp "$ROOT/$CASE" lab@127.0.0.1:/tmp/case.sh >/dev/null
 vm_ssh 'chmod +x /tmp/inbuxa /tmp/case.sh; [ ! -f /tmp/inbuxa-old ] || chmod +x /tmp/inbuxa-old'

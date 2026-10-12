@@ -63,6 +63,19 @@ This is early. What is built:
   the proxy, and the unit will not start without a configuration file. The
   console and the webmail run in containers beside it, or not at all.
 
+- **`join URL --key KEY`** -- the console and the webmail on this machine,
+  for a mail server already running at URL on another one. It reaches that
+  server only over its own HTTPS, with an API key a server administrator
+  made in the console (`--key -` reads it from standard input, and
+  `INBUXA_JOIN_KEY` keeps it out of the shell's history; it is never written
+  down). Through it the front ends' addresses go into the server's
+  `inbuxa:FrontEnds`, which registers their sign-in and lets the console
+  call the server from the browser, with no restart and nothing changed on
+  that machine by hand. It asks first, dry runs included, and refuses with
+  the reason when the key is wrong, the server is too old, or it already
+  lists other front ends (`--replace` to put these in their place). Needs a
+  server release newer than 2026.10.10.1.
+
 - **`plan -f` / `apply -f` / `export`** -- a whole installation described in
   one file, however many machines. Each machine acts on its own part and
   prints the command to run on the others; it never reaches them. `plan`
@@ -75,7 +88,7 @@ This is early. What is built:
   asked in a script whether it still matches itself.
 
 Not built yet: host installs of the console and the webmail, the terminal
-interface, `join`, `upgrade`, `uninstall`, and moving the server between a
+interface, `upgrade`, `uninstall`, and moving the server between a
 container and the host. The design is in the inbuxa specification (§6.1 and
 the installer draft); the phases are there too.
 
@@ -116,11 +129,17 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/run.sh e2e/cases/install-local.sh   a whole suite, and signing in to it
     e2e/vm/run.sh e2e/cases/install-public.sh  the same with real ports and certificates
     e2e/vm/run.sh e2e/cases/install-host.sh    the server on the host, the rest beside it
+    e2e/vm/run.sh e2e/cases/join.sh           front ends joined to a server elsewhere
     e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
     e2e/vm/run.sh e2e/cases/status-export.sh  intent against reality, and the file
     OLD_REF=<commit> e2e/vm/run.sh e2e/cases/upgrade-volumes.sh
                                               an install from before #5, upgraded
     e2e/vm/down.sh                            remove it
+
+`SERVER_BINARY=path/to/inbuxa e2e/vm/run.sh …` installs a server build
+instead of the release wherever a case installs the server on the host (the
+installer's `INBUXA_SERVER_BINARY`), for testing a server change before it
+is released.
 
 Each case starts from a copy of the machine taken when it was new, so a run
 is free to break it and a failure is the installer's rather than the last

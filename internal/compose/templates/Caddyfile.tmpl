@@ -40,6 +40,8 @@
 }
 {{- end}}
 
+{{- if .ServesServer}}
+
 # The mail server's web side: JMAP for the front ends and any other client,
 # CalDAV, CardDAV, autoconfig and MTA-STS. The server is told to believe the
 # X-Forwarded-For Caddy sets here, so a scanner is banned by its own address
@@ -69,3 +71,4 @@
 		redir https://{host}{uri} 308
 	}
 }
+{{- end}}

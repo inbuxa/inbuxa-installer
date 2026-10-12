@@ -32,6 +32,7 @@ type State struct {
 	Domain    string            `json:"domain,omitempty"`    //
 	Shapes    map[string]string `json:"shapes"`              // component -> container|host
 	Topology  string            `json:"topology,omitempty"`  // the file this came from, if any
+	ServerURL string            `json:"serverUrl,omitempty"` // the server on another machine these front ends were joined to
 	Updated   time.Time         `json:"updated"`             //
 	Installer string            `json:"installer,omitempty"` // the version that wrote this
 }

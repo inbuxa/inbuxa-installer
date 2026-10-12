@@ -85,3 +85,37 @@ func TestSecretsSurviveARewrite(t *testing.T) {
 		t.Error("writing the deployment rolled the secrets")
 	}
 }
+
+func TestJoinedFrontEndsReachTheServerElsewhere(t *testing.T) {
+	s := stack(false)
+	s.Server = false
+	s.RemoteServerURL = "https://mail.example.com"
+	c, k := render(t, s)
+	for _, bad := range []string{"\n  server:\n", "depends_on", "network_mode: host", "inbuxa-data:"} {
+		if strings.Contains(c, bad) {
+			t.Errorf("compose.yaml has %q", bad)
+		}
+	}
+	if !strings.Contains(c, "MAIL_SERVER_URL: https://mail.example.com") {
+		t.Errorf("the webmail does not reach the server elsewhere:\n%s", c)
+	}
+	if strings.Contains(k, "autoconfig.") || strings.Contains(k, "\nmail.example.com") {
+		t.Errorf("Caddy here serves the server's names:\n%s", k)
+	}
+	if !strings.Contains(k, "reverse_proxy webmail:8080") || !strings.Contains(k, "reverse_proxy console:8080") {
+		t.Errorf("Caddyfile:\n%s", k)
+	}
+}
+
+func TestJoinedToALoopbackServerTheWebmailSharesTheHost(t *testing.T) {
+	s := stack(false)
+	s.Server, s.Proxy, s.Local = false, false, true
+	s.RemoteServerURL = "http://127.0.0.1:8081"
+	c, _ := render(t, s)
+	if !strings.Contains(c, "network_mode: host") || !strings.Contains(c, "MAIL_SERVER_URL: http://127.0.0.1:8081") {
+		t.Errorf("compose.yaml:\n%s", c)
+	}
+	if s.WebmailIP != "127.0.0.1" {
+		t.Errorf("the webmail would be exempted at %s", s.WebmailIP)
+	}
+}

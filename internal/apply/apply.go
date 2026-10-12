@@ -680,7 +680,7 @@ func saveState(st *state.State, o plan.Options, f host.Facts, log Log) {
 }
 
 // Verify is the last step: does what was installed actually answer?
-func Verify(ctx context.Context, res *Result, stackConsole, stackWebmail bool, log Log) []string {
+func Verify(ctx context.Context, res *Result, server, stackConsole, stackWebmail bool, log Log) []string {
 	var problems []string
 	check := func(what, url string, want string) {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -699,7 +699,9 @@ func Verify(ctx context.Context, res *Result, stackConsole, stackWebmail bool, l
 		}
 		log.Info("%s answers", what)
 	}
-	check("the mail server", "http://127.0.0.1:8081/.well-known/jmap", "")
+	if server {
+		check("the mail server", "http://127.0.0.1:8081/.well-known/jmap", "")
+	}
 	if stackConsole {
 		check("the console", "http://127.0.0.1:8082/", "api-base-url")
 	}

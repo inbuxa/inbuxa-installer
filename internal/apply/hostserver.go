@@ -81,7 +81,18 @@ func (h hostServer) DataPath() string { return filepath.Join(h.home(), "data") +
 // Install puts the release binary, the user and the directories in place. It
 // changes nothing that is already right, so a converge can call it too.
 func (h hostServer) Install(ctx context.Context) error {
-	if v := binaryVersion(ctx, HostServerBinary); strings.Contains(v, release.ServerVersion) {
+	if path := os.Getenv("INBUXA_SERVER_BINARY"); path != "" {
+		// A server build to test, in place of the release. Said loudly,
+		// because nothing vouches for it the way the pinned checksum
+		// vouches for a release.
+		h.log.Step("installing %s instead of the release, as INBUXA_SERVER_BINARY says (no checksum)", path)
+		if out, err := exec.CommandContext(ctx, path, "--version").CombinedOutput(); err != nil {
+			return fmt.Errorf("%s does not run here: %s", path, strings.TrimSpace(string(out)))
+		}
+		if err := runQuiet(ctx, "install", "-m", "0755", path, HostServerBinary); err != nil {
+			return err
+		}
+	} else if v := binaryVersion(ctx, HostServerBinary); strings.Contains(v, release.ServerVersion) {
 		h.log.Info("%s is already %s", HostServerBinary, release.ServerVersion)
 	} else {
 		if err := h.fetchBinary(ctx); err != nil {
