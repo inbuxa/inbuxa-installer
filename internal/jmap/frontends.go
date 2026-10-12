@@ -31,7 +31,7 @@ type FrontEnds struct {
 }
 
 // ErrNoFrontEnds is a server too old to have inbuxa:FrontEnds.
-var ErrNoFrontEnds = errors.New("this server has no inbuxa:FrontEnds; it needs a release newer than 2026.10.10.1")
+var ErrNoFrontEnds = errors.New("this server has no inbuxa:FrontEnds; it needs a release newer than 2026.10.12")
 
 // AccountID is the signed-in account's id, which inbuxa: methods name.
 func (c *Client) AccountID(ctx context.Context) (string, error) {
