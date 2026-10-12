@@ -140,15 +140,19 @@ func TestTheServerOnTheHost(t *testing.T) {
 func TestWhatCannotBeBuiltIsRefusedOnItsScreen(t *testing.T) {
 	w := NewWizard(debian13(true), &fakeInstaller{})
 	press(w, KeyEnter)
-	typeText(w, "example.org")
-	for i := 0; i < len(w.fields); i++ {
-		press(w, KeyEnter)
+	for w.focus < len(w.fields)-1 {
+		press(w, KeyDown)
+	}
+	w.Update(Key{Kind: KeyRune, Rune: ' '}) // loopback: no web server
+	press(w, KeyEnter)
+	if w.screen != screenComponents {
+		t.Fatalf("not at the components: %q", w.message)
 	}
 	press(w, KeyDown)                       // the console
-	w.Update(Key{Kind: KeyRune, Rune: 'h'}) // on the host: not built
+	w.Update(Key{Kind: KeyRune, Rune: 'h'}) // on the host: files, and nothing to serve them
 	press(w, KeyEnter)
-	if w.screen != screenComponents || !strings.Contains(w.message, "not built yet") {
-		t.Errorf("a console host install got through: screen %d, %q", w.screen, w.message)
+	if w.screen != screenComponents || !strings.Contains(w.message, "web server") {
+		t.Errorf("a console host install on loopback got through: screen %d, %q", w.screen, w.message)
 	}
 	w.Update(Key{Kind: KeyRune, Rune: 'c'})
 	press(w, KeyUp)

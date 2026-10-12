@@ -171,3 +171,37 @@ func TestProxySnippetsLeaveOutWhatIsNotHere(t *testing.T) {
 		t.Error("a webmail that isn't installed is in the nginx configuration")
 	}
 }
+
+func TestFrontEndsOnTheHost(t *testing.T) {
+	s := stack(false) // the server in a container
+	s.Console, s.Webmail = false, false
+	s.ConsoleFiles, s.WebmailUnit = "/var/lib/inbuxa/console", true
+	c, k := render(t, s)
+	for _, bad := range []string{"\n  console:\n", "\n  webmail:\n"} {
+		if strings.Contains(c, bad) {
+			t.Errorf("compose.yaml still runs %q", bad)
+		}
+	}
+	for _, want := range []string{"network_mode: host", "/var/lib/inbuxa/console:/srv/console:ro", "\n  server:\n"} {
+		if !strings.Contains(c, want) {
+			t.Errorf("compose.yaml lacks %q", want)
+		}
+	}
+	for _, want := range []string{"root * /srv/console", "try_files {path} /index.html", "file_server", "reverse_proxy 127.0.0.1:8080", "reverse_proxy 127.0.0.1:8081"} {
+		if !strings.Contains(k, want) {
+			t.Errorf("Caddyfile lacks %q", want)
+		}
+	}
+	// A server in a container sees host processes at the gateway
+	if s.WebmailIP != "172.31.253.1" || s.CaddyIP != "172.31.253.1" {
+		t.Errorf("exempts %s and %s, not the gateway", s.WebmailIP, s.CaddyIP)
+	}
+	out, err := WriteProxySnippets(t.TempDir(), *s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nginx, _ := os.ReadFile(filepath.Join(out, "nginx-inbuxa.conf"))
+	if !strings.Contains(string(nginx), "root /var/lib/inbuxa/console;") || !strings.Contains(string(nginx), "proxy_pass http://127.0.0.1:8080;") {
+		t.Errorf("nginx-inbuxa.conf:\n%s", nginx)
+	}
+}

@@ -202,8 +202,7 @@ func install(args []string) int {
 		return 1
 	}
 	fmt.Println("\nChecking it works:")
-	problems := apply.Verify(context.Background(), res, true,
-		o.Shape(plan.Console) != plan.Skip, o.Shape(plan.Webmail) != plan.Skip, log)
+	problems := apply.Verify(context.Background(), res, p.Options, true, log)
 	for _, why := range problems {
 		fmt.Fprintln(os.Stderr, "  problem: "+why)
 	}
@@ -395,7 +394,7 @@ func (installer) Run(ctx context.Context, p plan.Plan, f host.Facts, log apply.L
 }
 
 func (installer) Verify(ctx context.Context, res *apply.Result, o plan.Options, log apply.Log) []string {
-	return apply.Verify(ctx, res, true, o.Shape(plan.Console) != plan.Skip, o.Shape(plan.Webmail) != plan.Skip, log)
+	return apply.Verify(ctx, res, o, true, log)
 }
 
 // printer is apply's log on the flag path: steps as lines, everything a
@@ -619,7 +618,7 @@ func exportCmd(args []string) int {
 		switch {
 		case st.Shapes[kind] != "":
 			m.Components = append(m.Components, topology.Component{Kind: kind, Shape: st.Shapes[kind]})
-		case kind == "server" && found.HostServer:
+		case (kind == "server" && found.HostServer) || (kind == "console" && found.HostConsole) || (kind == "webmail" && found.HostWebmail):
 			m.Components = append(m.Components, topology.Component{Kind: kind, Shape: "host"})
 		case found.Services[kind] != "":
 			m.Components = append(m.Components, topology.Component{Kind: kind, Shape: "container"})
@@ -702,7 +701,7 @@ func statusCmd() int {
 			fmt.Printf("  %-8s installed as a %-9s %s\n", kind, shape, state)
 		case intended:
 			fmt.Printf("  %-8s installed as a %-9s missing from the deployment\n", kind, shape)
-		case kind == "server" && found.HostServer:
+		case (kind == "server" && found.HostServer) || (kind == "console" && found.HostConsole) || (kind == "webmail" && found.HostWebmail):
 			fmt.Printf("  %-8s %-24s %s\n", kind, "on the host", state)
 		default:
 			fmt.Printf("  %-8s %-24s %s\n", kind, "in the deployment", state)

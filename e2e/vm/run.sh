@@ -45,6 +45,11 @@ if [ -n "${SERVER_BINARY:-}" ]; then
   vm_scp "$SERVER_BINARY" lab@127.0.0.1:/tmp/inbuxa-server-test >/dev/null
   vm_ssh 'chmod +x /tmp/inbuxa-server-test'
 fi
+# The console's and the webmail's release tarballs, the same way, for host
+# installs of them before a release carries them (INBUXA_CONSOLE_TARBALL and
+# INBUXA_WEBMAIL_TARBALL in the case).
+[ -z "${CONSOLE_TARBALL:-}" ] || vm_scp "$CONSOLE_TARBALL" lab@127.0.0.1:/tmp/inbuxa-console-test.tar.gz >/dev/null
+[ -z "${WEBMAIL_TARBALL:-}" ] || vm_scp "$WEBMAIL_TARBALL" lab@127.0.0.1:/tmp/inbuxa-webmail-test.tar.gz >/dev/null
 [ -z "${OLD_REF:-}" ] || vm_scp "$LAB/inbuxa-old" lab@127.0.0.1:/tmp/inbuxa-old >/dev/null
 vm_scp "$ROOT/$CASE" lab@127.0.0.1:/tmp/case.sh >/dev/null
 vm_ssh 'chmod +x /tmp/inbuxa /tmp/case.sh; [ ! -f /tmp/inbuxa-old ] || chmod +x /tmp/inbuxa-old'

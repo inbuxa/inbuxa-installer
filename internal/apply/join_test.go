@@ -78,7 +78,7 @@ func TestJoinCheck(t *testing.T) {
 		{"a fresh server takes them", map[string]any{"environmentWebmailClientSecret": false}, "good-key", false, ""},
 		{"the same addresses again", map[string]any{"adminUrl": "https://admin.example.com", "webmailUrl": "https://webmail.example.com"}, "good-key", false, ""},
 		{"a wrong key", map[string]any{}, "bad-key", false, "API key"},
-		{"a server too old", nil, "good-key", false, "newer than"},
+		{"a server too old", nil, "good-key", false, "or newer"},
 		{"another console listed", map[string]any{"adminUrl": "https://other.example.com"}, "good-key", false, "--replace"},
 		{"another console, replaced", map[string]any{"adminUrl": "https://other.example.com"}, "good-key", true, ""},
 		{"another webmail listed", map[string]any{"webmailUrl": "https://mail-ui.example.com"}, "good-key", false, "--replace"},

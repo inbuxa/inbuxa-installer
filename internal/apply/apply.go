@@ -24,6 +24,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -45,8 +46,8 @@ import (
 // theirs.
 const (
 	DefaultServerImage  = release.ServerImage
-	DefaultConsoleImage = "registry.coffeylabs.org/inbuxa/inbuxa-admin:2026.10.12"
-	DefaultWebmailImage = "registry.coffeylabs.org/inbuxa/inbuxa-webmail:2026.10.9-g62936ab"
+	DefaultConsoleImage = "registry.coffeylabs.org/inbuxa/inbuxa-admin:" + release.ConsoleVersion
+	DefaultWebmailImage = "registry.coffeylabs.org/inbuxa/inbuxa-webmail:" + release.WebmailVersion
 	DefaultCaddyImage   = "docker.io/library/caddy:2-alpine"
 	DefaultSubnet       = "172.31.253.0/24"
 )
@@ -78,11 +79,6 @@ type Log interface {
 // it says so rather than pretending a host install of either happened.
 func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, error) {
 	o := p.Options
-	for _, c := range []plan.Component{plan.Console, plan.Webmail} {
-		if o.Shape(c) == plan.Host {
-			return nil, fmt.Errorf("host installs of the console and the webmail are not built yet: %s was asked for as a host install", c)
-		}
-	}
 	if o.Shape(plan.Server) == plan.Skip {
 		return nil, fmt.Errorf("this build installs the front ends only alongside a server it installs too; use join once that is built")
 	}
@@ -107,7 +103,9 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		if needContainers && !f.Runtime.Usable {
 			return nil, fmt.Errorf("after installing what was missing, containers still are not usable: %s", f.Runtime.Why)
 		}
-		log.Info("using %s %s", f.Runtime.Kind, f.Runtime.Version)
+		if needContainers {
+			log.Info("using %s %s", f.Runtime.Kind, f.Runtime.Version)
+		}
 	}
 
 	dir := o.Dir
@@ -124,6 +122,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		WebmailHost:  o.WebmailHost,
 		Console:      o.Shape(plan.Console) == plan.Container,
 		Webmail:      o.Shape(plan.Webmail) == plan.Container,
+		WebmailUnit:  o.Shape(plan.Webmail) == plan.Host,
 		Proxy:        !o.Local && o.Proxy == "caddy",
 		ServerImage:  DefaultServerImage,
 		ConsoleImage: DefaultConsoleImage,
@@ -138,19 +137,19 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		// Nothing is published and nothing is certified: the addresses are
 		// the loopback binds, which is what the front ends are told to use.
 		stack.ServerPublicURL = "http://127.0.0.1:8081"
-		if stack.Console {
+		if o.Shape(plan.Console) != plan.Skip {
 			stack.ConsoleURL = "http://127.0.0.1:8082"
 		}
-		if stack.Webmail {
+		if o.Shape(plan.Webmail) != plan.Skip {
 			stack.WebmailURL = "http://127.0.0.1:8080"
 		}
 	} else {
 		stack.MailPorts = []int{25, 465, 993, 995, 4190}
 		stack.ServerPublicURL = "https://" + o.MailHost
-		if stack.Console {
+		if o.Shape(plan.Console) != plan.Skip {
 			stack.ConsoleURL = "https://" + o.ConsoleHost
 		}
-		if stack.Webmail {
+		if o.Shape(plan.Webmail) != plan.Skip {
 			stack.WebmailURL = "https://" + o.WebmailHost
 		}
 	}
@@ -187,6 +186,10 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		stack.ACMECARoot = "acme-ca-root.pem"
 	}
 	stack.ACMEDirectory = o.ACMEDirectory
+
+	if o.Shape(plan.Console) == plan.Host {
+		stack.ConsoleFiles = hostConsole{deploy: dir}.dir()
+	}
 
 	log.Step("writing the deployment into %s", dir)
 	var sec compose.Secrets
@@ -244,6 +247,34 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		log.Info("%s, %s", hostUnitPath, hs.envPath())
 	}
 
+	// The front ends on the host: in place before anything starts, the
+	// console's files because the proxy serves them from the moment it is
+	// up, the webmail because its unit starts with the rest of the stack.
+	var hw *hostWebmail
+	webmailEnvChanged := false
+	if o.Shape(plan.Webmail) != plan.Host {
+		// A webmail moved off the host gives its port back before a
+		// container wants it.
+		if _, err := os.Stat(webmailUnitPath); err == nil {
+			log.Info("stopping the webmail installed on the host, which is no longer asked for")
+			runQuiet(ctx, "systemctl", "disable", "--now", "--quiet", HostWebmailUnit)
+		}
+	}
+	if o.Shape(plan.Console) == plan.Host {
+		if err := (hostConsole{deploy: dir, log: log}).Install(ctx, stack.ServerPublicURL); err != nil {
+			return nil, err
+		}
+	}
+	if o.Shape(plan.Webmail) == plan.Host {
+		hw = &hostWebmail{deploy: dir, log: log}
+		if err := hw.Install(ctx); err != nil {
+			return nil, err
+		}
+		if webmailEnvChanged, err = hw.WriteEnv(webmailEnv(o, stack, sec, hw.Version())); err != nil {
+			return nil, err
+		}
+	}
+
 	// A machine that already runs this installation is converged, not set up
 	// again. First boot happens once: bootstrap, the first administrator, the
 	// first account, the ACME account. Running it a second time asks a
@@ -252,6 +283,16 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	// front end used to do, and why it could not.
 	if existing, err := state.Load(); err == nil && existing.Installed() {
 		res, err := converge(ctx, o, stack, cmp, hs, existing, f, log)
+		if err == nil && hw != nil {
+			// Its files may be new, or what it reads at start; or it may
+			// simply not be running.
+			active := exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", HostWebmailUnit).Run() == nil
+			if webmailEnvChanged || !active || existing.Shapes["webmail"] != string(plan.Host) {
+				if err := hw.Start(ctx); err != nil {
+					return res, withLogs(ctx, err, hw, "webmail")
+				}
+			}
+		}
 		if err == nil && !o.Local && o.Proxy == "snippets" {
 			// What the web server is told follows what is installed here.
 			if dir, err := compose.WriteProxySnippets(o.Dir, stack); err == nil {
@@ -401,6 +442,11 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	if !stack.Empty() {
 		if err := cmp.Run(ctx, "up", "-d", "--remove-orphans"); err != nil {
 			return res, err
+		}
+	}
+	if hw != nil {
+		if err := hw.Start(ctx); err != nil {
+			return res, withLogs(ctx, err, hw, "webmail")
 		}
 	}
 
@@ -723,7 +769,7 @@ func saveState(st *state.State, o plan.Options, f host.Facts, log Log) {
 }
 
 // Verify is the last step: does what was installed actually answer?
-func Verify(ctx context.Context, res *Result, server, stackConsole, stackWebmail bool, log Log) []string {
+func Verify(ctx context.Context, res *Result, o plan.Options, server bool, log Log) []string {
 	var problems []string
 	check := func(what, url string, want string) {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -745,10 +791,25 @@ func Verify(ctx context.Context, res *Result, server, stackConsole, stackWebmail
 	if server {
 		check("the mail server", "http://127.0.0.1:8081/.well-known/jmap", "")
 	}
-	if stackConsole {
+	switch o.Shape(plan.Console) {
+	case plan.Container:
 		check("the console", "http://127.0.0.1:8082/", "api-base-url")
+	case plan.Host:
+		// Files, served by a web server that may not be loaded yet: what
+		// can be checked here is that they are in place and name the
+		// server.
+		index := filepath.Join(o.Dir, "console", "index.html")
+		b, err := os.ReadFile(index)
+		switch {
+		case err != nil:
+			problems = append(problems, "the console's files are missing: "+err.Error())
+		case !strings.Contains(string(b), `name="api-base-url" content="`+res.ServerURL+`"`):
+			problems = append(problems, index+" does not point at "+res.ServerURL)
+		default:
+			log.Info("the console's files are in place, pointed at %s", res.ServerURL)
+		}
 	}
-	if stackWebmail {
+	if o.Shape(plan.Webmail) != plan.Skip {
 		check("the webmail", "http://127.0.0.1:8080/api/health", "\"ok\":true")
 	}
 	return problems
