@@ -28,6 +28,7 @@ import (
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/plan"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/state"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/topology"
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/tui"
 )
 
 // version is stamped by the release build; a build from a working tree says
@@ -36,6 +37,8 @@ var version = "dev"
 
 const usage = `inbuxa -- install the inbuxa suite on this machine
 
+  inbuxa                     the interface: the same as install, with the
+                             machine's own facts on screen
   inbuxa install [flags]     install or converge (no flags: the interface)
   inbuxa join URL [flags]    the console and the webmail here, for a server
                              already running at URL
@@ -102,12 +105,8 @@ func main() {
 			runtime.GOOS)
 		os.Exit(2)
 	}
-	if len(os.Args) < 2 {
-		// The interface is the no-argument case. Until it lands, say so
-		// plainly rather than pretending: a half-built screen is worse than
-		// a sentence telling you which flags to use.
-		fmt.Fprint(os.Stderr, "the interface is not built yet -- run `inbuxa install --help` for the flags\n")
-		os.Exit(2)
+	if len(os.Args) < 2 || (os.Args[1] == "install" && len(os.Args) == 2) {
+		os.Exit(interactive())
 	}
 	switch os.Args[1] {
 	case "install":
@@ -358,6 +357,42 @@ func join(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// interactive is the no-argument case: the interface, when there is a
+// terminal to show it on. Without one -- a pipe, a CI job -- it says which
+// flags do the same, rather than waiting on keys that will never come.
+func interactive() int {
+	if !tui.IsTerminal(os.Stdin) || !tui.IsTerminal(os.Stdout) {
+		fmt.Fprint(os.Stderr, "no terminal to show the installer in -- run `inbuxa install --help` for the flags that do the same\n")
+		return 2
+	}
+	w := tui.NewWizard(host.Survey(context.Background()), installer{})
+	if err := tui.Run(w, os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	summary, ran, ok := w.Outcome()
+	if !ran {
+		return 0
+	}
+	fmt.Println(strings.Join(summary, "\n"))
+	if !ok {
+		return 1
+	}
+	return 0
+}
+
+// installer is what the interface installs with: the same apply.Run and
+// apply.Verify the flags use.
+type installer struct{}
+
+func (installer) Run(ctx context.Context, p plan.Plan, f host.Facts, log apply.Log) (*apply.Result, error) {
+	return apply.Run(ctx, p, f, log)
+}
+
+func (installer) Verify(ctx context.Context, res *apply.Result, o plan.Options, log apply.Log) []string {
+	return apply.Verify(ctx, res, true, o.Shape(plan.Console) != plan.Skip, o.Shape(plan.Webmail) != plan.Skip, log)
 }
 
 // printer is apply's log on the flag path: steps as lines, everything a
@@ -702,91 +737,5 @@ func shape(s string) (plan.Shape, error) {
 }
 
 // render is the first screen, as text: what this machine is, and what that
-// allows. Every line is something a later choice depends on.
-func render(f host.Facts) string {
-	var b strings.Builder
-	b.WriteString("This machine\n")
-	os_ := f.OS.Pretty
-	if os_ == "" {
-		os_ = "an unrecognized Linux"
-	}
-	fmt.Fprintf(&b, "  %-22s %s\n", "system", os_)
-	fmt.Fprintf(&b, "  %-22s %s\n", "init", yes(f.Systemd, "systemd", "not systemd -- host installs are unavailable"))
-	fmt.Fprintf(&b, "  %-22s %s\n", "running as", yes(f.Root, "root", "an ordinary user -- installing will fail"))
-	if f.MemoryMB > 0 {
-		fmt.Fprintf(&b, "  %-22s %d MB\n", "memory", f.MemoryMB)
-	}
-	if f.DiskFreeGB > 0 {
-		fmt.Fprintf(&b, "  %-22s %d GB free\n", "disk", f.DiskFreeGB)
-	}
-
-	runtime := "none: neither docker nor podman is installed"
-	switch {
-	case f.Runtime.Usable:
-		runtime = f.Runtime.Kind + " " + f.Runtime.Version + ", compose " + f.Runtime.Compose
-		if f.Runtime.Socket != "" {
-			runtime += ", at " + f.Runtime.Socket
-		}
-	case f.Runtime.Present:
-		runtime = f.Runtime.Kind + " installed but not usable: " + f.Runtime.Why
-	}
-	fmt.Fprintf(&b, "  %-22s %s\n", "container runtime", runtime)
-
-	glibc := "could not be read"
-	if f.Glibc.Version != "" {
-		glibc = f.Glibc.Version
-		if !f.Glibc.AtLeast(plan.ServerGlibcMajor, plan.ServerGlibcMinor) {
-			glibc += fmt.Sprintf(" (older than the %d.%d the server binary needs)", plan.ServerGlibcMajor, plan.ServerGlibcMinor)
-		}
-	}
-	fmt.Fprintf(&b, "  %-22s %s\n", "glibc", glibc)
-
-	node := "not installed"
-	switch {
-	case f.Node.Present && f.Node.Major >= 22:
-		node = f.Node.Version + " at " + f.Node.Path
-	case f.Node.Present:
-		node = f.Node.Version + " (too old for a host install of the webmail)"
-	}
-	fmt.Fprintf(&b, "  %-22s %s\n", "node", node)
-	if f.Existing != "" {
-		fmt.Fprintf(&b, "  %-22s %s\n", "existing install", f.Existing)
-	}
-
-	b.WriteString("\nPorts\n")
-	for _, p := range f.Ports {
-		state := "free"
-		switch {
-		case p.Free:
-		case p.Unknown:
-			state = "cannot tell without root"
-		default:
-			state = "held"
-			if p.Holder != "" {
-				state += " by " + p.Holder
-			}
-		}
-		fmt.Fprintf(&b, "  %-6d %-42s %s\n", p.Number, p.For, state)
-	}
-
-	b.WriteString("\nWhat this machine allows\n")
-	for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
-		var shapes []string
-		for _, s := range []plan.Shape{plan.Container, plan.Host} {
-			if a := plan.Available(f, c, s); a.OK {
-				shapes = append(shapes, string(s))
-			} else {
-				shapes = append(shapes, fmt.Sprintf("%s (no: %s)", s, a.Why))
-			}
-		}
-		fmt.Fprintf(&b, "  %-10s %s\n", c, strings.Join(shapes, "   "))
-	}
-	return b.String()
-}
-
-func yes(b bool, t, f string) string {
-	if b {
-		return t
-	}
-	return f
-}
+// allows. The interface's first screen is the same text.
+func render(f host.Facts) string { return plan.SurveyText(f) }

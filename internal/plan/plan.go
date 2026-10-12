@@ -184,16 +184,10 @@ func Available(f host.Facts, c Component, s Shape) Availability {
 			}
 			return Availability{OK: true}
 		case Console:
-			// Static files behind whatever serves them: nothing to run.
-			return Availability{OK: true}
+			return Availability{Why: "not built yet: the console runs in a container for now"}
 		case Webmail:
-			if !f.Node.Present {
-				return Availability{Why: "a host install of the webmail needs Node 22 or newer; none is installed"}
-			}
-			if f.Node.Major < 22 {
-				return Availability{Why: fmt.Sprintf("a host install of the webmail needs Node 22 or newer; found %s", f.Node.Version)}
-			}
-			return Availability{OK: true}
+			// Phase 2: a unit with a pinned Node (deps already fetches one).
+			return Availability{Why: "not built yet: the webmail runs in a container for now"}
 		}
 	}
 	return Availability{Why: "unknown shape"}

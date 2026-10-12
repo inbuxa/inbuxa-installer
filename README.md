@@ -16,6 +16,7 @@ One program that installs the **inbuxa** suite on the machine you run it on:
 the mail server, the administration console and the webmail, each as a
 container or on the host, in any mixture.
 
+    inbuxa                         the interface: all of the below, a screen at a time
     inbuxa survey                  what this machine is, as the installer sees it
     inbuxa install --dry-run …     what would happen, before any of it does
     inbuxa install …               do it
@@ -33,6 +34,17 @@ deliver, with the reason.
 ## What works today
 
 This is early. What is built:
+
+- **`inbuxa`** on its own (or `inbuxa install` with no options) -- the
+  interface: six screens, always in the same order. What it found on this
+  machine; the names; which components go here and how, with what the
+  machine can't do greyed out and the reason beside it; what answers on 80
+  and 443; the whole plan, with the command that does the same without the
+  interface; and the install, ticking off its steps, ending on the
+  credentials and addresses, which stay in the terminal afterwards. Nothing
+  happens until you answer y. It fills in the same options the flags do --
+  it is not a second installer -- and it is built on the standard library
+  alone, like the rest. Without a terminal it says which flags to use.
 
 - **`survey`** -- the machine's facts: distribution, init, whether Docker is
   usable *by this user*, Node's version, which of the suite's ports are free
@@ -87,9 +99,10 @@ This is early. What is built:
   installing. It exits non-zero when they disagree, so a machine can be
   asked in a script whether it still matches itself.
 
-Not built yet: host installs of the console and the webmail, the terminal
-interface, `upgrade`, `uninstall`, and moving the server between a
-container and the host. The design is in the inbuxa specification (§6.1 and
+Not built yet: host installs of the console and the webmail, `join` in the
+interface (it is a command for now), `upgrade`, `uninstall`, moving the
+server between a container and the host, and `--proxy snippets`, which the
+plan describes but nothing writes yet. The design is in the inbuxa specification (§6.1 and
 the installer draft); the phases are there too.
 
     inbuxa install --local --domain example.test --install-deps --yes
@@ -130,6 +143,7 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/run.sh e2e/cases/install-public.sh  the same with real ports and certificates
     e2e/vm/run.sh e2e/cases/install-host.sh    the server on the host, the rest beside it
     e2e/vm/run.sh e2e/cases/join.sh           front ends joined to a server elsewhere
+    e2e/vm/run.sh e2e/cases/interface.sh      the interface, driven key by key in a terminal
     e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
     e2e/vm/run.sh e2e/cases/status-export.sh  intent against reality, and the file
     OLD_REF=<commit> e2e/vm/run.sh e2e/cases/upgrade-volumes.sh
