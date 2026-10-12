@@ -17,6 +17,7 @@ package discover
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -35,6 +36,22 @@ type Found struct {
 	Runtime    string            // what is running them
 	Proxy      bool              // the deployment includes a proxy
 	Credential bool              // credentials.txt is there
+	HostServer bool              // the server runs on the host, under systemd
+}
+
+// HostServerUnit is the unit a host install of the server runs as.
+const (
+	HostServerUnit     = "inbuxa-server.service"
+	HostServerUnitPath = "/etc/systemd/system/" + HostServerUnit
+)
+
+// HostServer is whether the server is installed here as a host install, and
+// whether systemd has it running.
+func HostServer(ctx context.Context) (installed, active bool) {
+	if _, err := os.Stat(HostServerUnitPath); err != nil {
+		return false, false
+	}
+	return true, exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", HostServerUnit).Run() == nil
 }
 
 // Dirs are where a deployment may be. The first is what this installer
@@ -52,10 +69,16 @@ func Run(ctx context.Context, f host.Facts, dirs ...string) Found {
 	if len(dirs) == 0 {
 		dirs = Dirs
 	}
+	// A server on the host is in no compose file: systemd is what knows.
+	if installed, active := HostServer(ctx); installed {
+		found.HostServer = true
+		found.Services["server"] = map[bool]string{true: "running", false: "stopped"}[active]
+	}
 	for _, dir := range dirs {
-		if _, err := os.Stat(filepath.Join(dir, "compose.yaml")); err == nil {
-			found.Dir = dir
-			break
+		for _, marker := range []string{"compose.yaml", "server.env"} {
+			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil && found.Dir == "" {
+				found.Dir = dir
+			}
 		}
 	}
 	if found.Dir == "" {
@@ -68,6 +91,7 @@ func Run(ctx context.Context, f host.Facts, dirs ...string) Found {
 
 	b, err := os.ReadFile(filepath.Join(found.Dir, "compose.yaml"))
 	if err != nil {
+		// A server on the host with nothing beside it has no compose file.
 		return found
 	}
 	text := string(b)

@@ -433,6 +433,8 @@ func exportCmd(args []string) int {
 		switch {
 		case st.Shapes[kind] != "":
 			m.Components = append(m.Components, topology.Component{Kind: kind, Shape: st.Shapes[kind]})
+		case kind == "server" && found.HostServer:
+			m.Components = append(m.Components, topology.Component{Kind: kind, Shape: "host"})
 		case found.Services[kind] != "":
 			m.Components = append(m.Components, topology.Component{Kind: kind, Shape: "container"})
 		}
@@ -514,6 +516,8 @@ func statusCmd() int {
 			fmt.Printf("  %-8s installed as a %-9s %s\n", kind, shape, state)
 		case intended:
 			fmt.Printf("  %-8s installed as a %-9s missing from the deployment\n", kind, shape)
+		case kind == "server" && found.HostServer:
+			fmt.Printf("  %-8s %-24s %s\n", kind, "on the host", state)
 		default:
 			fmt.Printf("  %-8s %-24s %s\n", kind, "in the deployment", state)
 		}

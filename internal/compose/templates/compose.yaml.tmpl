@@ -4,12 +4,20 @@
 # from this directory. Secrets are in .env beside it and the administrator's
 # password is in credentials.txt -- both readable only by root.
 #
+{{- if .HostServer}}
+# The mail server runs on this machine under systemd (inbuxa-server.service),
+# not in this project. Its plain HTTP is on loopback only, which is why the
+# webmail and Caddy share the host's network: that is where they reach it, as
+# http://, a leg that never leaves this machine.
+{{- else}}
 # The mail server's plain HTTP port is published on loopback only and reached
 # over the private network below, which is why the front ends talk to it as
 # http://: that leg never leaves this machine.
+{{- end}}
 name: {{.Project}}
 
 services:
+{{- if .Server}}
   server:
     image: {{.ServerImage}}
     hostname: {{.MailHost}}
@@ -48,12 +56,15 @@ services:
     networks:
       stack:
         ipv4_address: {{.ServerIP}}
+{{- end}}
 {{- if .Console}}
 
   console:
     image: {{.ConsoleImage}}
     restart: unless-stopped
+{{- if .Server}}
     depends_on: [server]
+{{- end}}
     # Not read-only, unlike the webmail: this image writes the api-base-url
     # into index.html when it starts, which is what lets one image serve any
     # installation. A read-only root makes it restart forever instead.
@@ -73,15 +84,28 @@ services:
   webmail:
     image: {{.WebmailImage}}
     restart: unless-stopped
+{{- if .Server}}
     depends_on: [server]
+{{- end}}
     # Immutable: read-only root, no volume, sessions in memory. A restart
     # signs everyone out; nothing else is lost, because nothing else is kept.
     read_only: true
     tmpfs: [/tmp]
+{{- if .HostServer}}
+    # On the host's network, listening on loopback only, beside the server.
+    network_mode: host
+{{- else}}
     ports:
       - "{{.WebmailBind}}:8080"
+{{- end}}
     environment:
+{{- if .HostServer}}
+      HOST: 127.0.0.1
+      PORT: "8080"
+      MAIL_SERVER_URL: http://127.0.0.1:8081
+{{- else}}
       MAIL_SERVER_URL: http://server:8080
+{{- end}}
       APP_SECRET: ${APP_SECRET:?APP_SECRET is missing from .env}
       APP_NAME: inbuxa
       IMMUTABLE: "1"
@@ -106,20 +130,30 @@ services:
       # is not the webmail.
       PUSH_URL: {{.WebmailURL}}
 {{- end}}
+{{- if not .HostServer}}
     networks:
       stack:
         ipv4_address: {{.WebmailIP}}
+{{- end}}
 {{- end}}
 {{- if .Proxy}}
 
   caddy:
     image: {{.CaddyImage}}
     restart: unless-stopped
+{{- if .Server}}
     depends_on: [server]
+{{- end}}
+{{- if .HostServer}}
+    # On the host's network: it holds 80 and 443 itself, and reaches the
+    # server, the webmail and the console on loopback.
+    network_mode: host
+{{- else}}
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
+{{- end}}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -127,20 +161,28 @@ services:
 {{- if .ACMECARoot}}
       - ./acme-ca-root.pem:/etc/caddy/acme-ca-root.pem:ro
 {{- end}}
+{{- if not .HostServer}}
     networks:
       stack:
         ipv4_address: {{.CaddyIP}}
 {{- end}}
+{{- end}}
+{{- if or .Server .Console}}
 
 networks:
   stack:
     ipam:
       config:
         - subnet: {{.Subnet}}
+{{- end}}
+{{- if or .Server .Proxy}}
 
 volumes:
+{{- end}}
+{{- if .Server}}
   inbuxa-etc:
   inbuxa-data:
+{{- end}}
 {{- if .Proxy}}
   # Certificates and the ACME account. Losing this means asking for every
   # certificate again, which is how rate limits are reached.

@@ -51,7 +51,7 @@ func TestBootstrapReturnsTheAdministrator(t *testing.T) {
 	c, seen := fake(t, map[string]string{
 		"x:Bootstrap/set": `{"methodResponses":[["x:Bootstrap/set",{"updated":{"singleton":{"username":"admin@example.com","secret":"s3cret"}}},"0"]]}`,
 	})
-	a, err := c.Bootstrap(context.Background(), "mail.example.com", "example.com")
+	a, err := c.Bootstrap(context.Background(), "mail.example.com", "example.com", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,5 +152,74 @@ func TestBearerReplacesBasic(t *testing.T) {
 	c.Token = "API_wrong" // with the right password still set
 	if _, err := c.Do(context.Background(), Call{"x:Domain/query", map[string]any{}, "0"}); err == nil {
 		t.Fatal("a wrong token was accepted: the password must not be sent alongside it")
+	}
+}
+
+func TestBootstrapOnTheHostNamesItsDataDirectory(t *testing.T) {
+	c, seen := fake(t, map[string]string{
+		"x:Bootstrap/set": `{"methodResponses":[["x:Bootstrap/set",{"updated":{"singleton":{"username":"admin@example.com","secret":"s3cret"}}},"0"]]}`,
+	})
+	if _, err := c.Bootstrap(context.Background(), "mail.example.com", "example.com", "/var/lib/inbuxa/server/data/"); err != nil {
+		t.Fatal(err)
+	}
+	update := (*seen)[0]["args"].(map[string]any)["update"].(map[string]any)["singleton"].(map[string]any)
+	store, _ := update["dataStore"].(map[string]any)
+	if store["@type"] != "RocksDb" || store["path"] != "/var/lib/inbuxa/server/data/" {
+		t.Errorf("dataStore = %v", update["dataStore"])
+	}
+}
+
+const defaultListeners = `{"methodResponses":[
+	["x:NetworkListener/query",{"ids":["a","b","c"]},"0"],
+	["x:NetworkListener/get",{"list":[
+		{"id":"a","name":"smtp","protocol":"smtp","tlsImplicit":false,"bind":{"[::]:25":true}},
+		{"id":"b","name":"https","protocol":"http","tlsImplicit":true,"bind":{"[::]:443":true}},
+		{"id":"c","name":"http","protocol":"http","tlsImplicit":false,"bind":{"[::]:8080":true}}
+	]},"1"]]}`
+
+func TestHostListenersMoveHTTPAndLeave443ToTheProxy(t *testing.T) {
+	c, seen := fake(t, map[string]string{
+		"x:NetworkListener/query": defaultListeners,
+		"x:NetworkListener/set":   `{"methodResponses":[["x:NetworkListener/set",{"updated":{"c":null},"destroyed":["b"]},"0"]]}`,
+	})
+	if err := c.HostListeners(context.Background(), "127.0.0.1:8081", false); err != nil {
+		t.Fatal(err)
+	}
+	args := (*seen)[1]["args"].(map[string]any)
+	update := args["update"].(map[string]any)
+	if len(update) != 1 {
+		t.Fatalf("updated %v, want only the plain HTTP listener", update)
+	}
+	bind := update["c"].(map[string]any)["bind"].(map[string]any)
+	if len(bind) != 1 || bind["127.0.0.1:8081"] != true {
+		t.Errorf("http bind = %v", bind)
+	}
+	if d := args["destroy"].([]any); len(d) != 1 || d[0] != "b" {
+		t.Errorf("destroy = %v, want the HTTPS listener", d)
+	}
+}
+
+func TestHostListenersOnLoopbackForALocalInstall(t *testing.T) {
+	c, seen := fake(t, map[string]string{
+		"x:NetworkListener/query": defaultListeners,
+		"x:NetworkListener/set":   `{"methodResponses":[["x:NetworkListener/set",{"updated":{"a":null,"c":null},"destroyed":["b"]},"0"]]}`,
+	})
+	if err := c.HostListeners(context.Background(), "127.0.0.1:8081", true); err != nil {
+		t.Fatal(err)
+	}
+	update := (*seen)[1]["args"].(map[string]any)["update"].(map[string]any)
+	bind := update["a"].(map[string]any)["bind"].(map[string]any)
+	if len(bind) != 1 || bind["127.0.0.1:25"] != true {
+		t.Errorf("smtp bind = %v, want loopback", bind)
+	}
+}
+
+func TestHostListenersRefusalIsAnError(t *testing.T) {
+	c, _ := fake(t, map[string]string{
+		"x:NetworkListener/query": defaultListeners,
+		"x:NetworkListener/set":   `{"methodResponses":[["x:NetworkListener/set",{"notDestroyed":{"b":{"type":"forbidden","description":"no"}}},"0"]]}`,
+	})
+	if err := c.HostListeners(context.Background(), "127.0.0.1:8081", false); err == nil {
+		t.Fatal("a refused destroy was not reported")
 	}
 }

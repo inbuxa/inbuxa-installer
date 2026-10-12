@@ -48,12 +48,20 @@ This is early. What is built:
   anything is put in place. `install --install-deps` does the same as part of
   a run. A missing dependency is an offer, not a refusal.
 
-- **`install --yes`** -- carries the plan out, for container shapes: writes
-  the deployment, fetches the images, brings the mail server up in bootstrap
-  mode with a credential that exists only for that step, completes bootstrap,
-  brings the rest up without it, exempts the front ends from the auto-ban,
-  creates the first mailbox, writes `credentials.txt` and `dns.zone`, and
-  then checks that all three answer.
+- **`install --yes`** -- carries the plan out: writes the deployment,
+  fetches the images, brings the mail server up in bootstrap mode with a
+  credential that exists only for that step, completes bootstrap, brings the
+  rest up without it, exempts the front ends from the auto-ban, creates the
+  first mailbox, writes `credentials.txt` and `dns.zone`, and then checks
+  that all three answer.
+- **`install --server host`** -- the same, with the mail server as the
+  release binary under systemd instead of a container, checked against a
+  checksum in the source. It gets a user of its own, its configuration and
+  data in `<dir>/server`, and a unit, `inbuxa-server.service`. During setup
+  it is reachable from the machine itself and nowhere else; afterwards its
+  plain HTTP is on loopback for the proxy and the webmail, 443 is left to
+  the proxy, and the unit will not start without a configuration file. The
+  console and the webmail run in containers beside it, or not at all.
 
 - **`plan -f` / `apply -f` / `export`** -- a whole installation described in
   one file, however many machines. Each machine acts on its own part and
@@ -66,8 +74,9 @@ This is early. What is built:
   installing. It exits non-zero when they disagree, so a machine can be
   asked in a script whether it still matches itself.
 
-Not built yet: host installs, the terminal interface, `join`, `status`,
-`upgrade`, `uninstall`. The design is in the inbuxa specification (§6.1 and
+Not built yet: host installs of the console and the webmail, the terminal
+interface, `join`, `upgrade`, `uninstall`, and moving the server between a
+container and the host. The design is in the inbuxa specification (§6.1 and
 the installer draft); the phases are there too.
 
     inbuxa install --local --domain example.test --install-deps --yes
@@ -106,6 +115,7 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/run.sh e2e/cases/deps.sh           the offer, and taking it
     e2e/vm/run.sh e2e/cases/install-local.sh   a whole suite, and signing in to it
     e2e/vm/run.sh e2e/cases/install-public.sh  the same with real ports and certificates
+    e2e/vm/run.sh e2e/cases/install-host.sh    the server on the host, the rest beside it
     e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
     e2e/vm/run.sh e2e/cases/status-export.sh  intent against reality, and the file
     OLD_REF=<commit> e2e/vm/run.sh e2e/cases/upgrade-volumes.sh

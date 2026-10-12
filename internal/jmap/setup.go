@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -40,7 +41,12 @@ func (c *Client) CheckBootstrapMode(ctx context.Context) error {
 // Bootstrap completes the setup wizard the web UI would otherwise walk someone
 // through, and returns the administrator it creates. The temporary bootstrap
 // account stops working once the server restarts out of bootstrap mode.
-func (c *Client) Bootstrap(ctx context.Context, hostname, domain string) (Admin, error) {
+//
+// dataPath is where the built-in store keeps its files. Empty leaves the
+// server's default, /var/lib/inbuxa/, which is the image's data volume; a
+// server on the host is given a directory of its own, so its store does not
+// share a directory with the deployment's files.
+func (c *Client) Bootstrap(ctx context.Context, hostname, domain, dataPath string) (Admin, error) {
 	update := map[string]any{
 		"serverHostname": hostname,
 		"defaultDomain":  domain,
@@ -56,6 +62,9 @@ func (c *Client) Bootstrap(ctx context.Context, hostname, domain string) (Admin,
 			"ansi": false, "multiline": false, "lossy": false,
 			"events": map[string]any{}, "eventsPolicy": "exclude",
 		},
+	}
+	if dataPath != "" {
+		update["dataStore"] = map[string]any{"@type": "RocksDb", "path": dataPath}
 	}
 	rs, err := c.Do(ctx, Call{"x:Bootstrap/set", map[string]any{"update": map[string]any{"singleton": update}}, "0"})
 	if err != nil {
@@ -330,4 +339,88 @@ func (c *Client) DNSZone(ctx context.Context, domainID string) (string, error) {
 		return "", errors.New("x:Domain/get did not return the domain")
 	}
 	return got.List[0].DNSZoneFile, nil
+}
+
+// Listener is one of the server's network listeners, as much of it as
+// HostListeners needs to tell them apart.
+type Listener struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Protocol    string          `json:"protocol"`
+	TLSImplicit bool            `json:"tlsImplicit"`
+	Bind        map[string]bool `json:"bind"`
+}
+
+// Listeners lists the server's network listeners.
+func (c *Client) Listeners(ctx context.Context) ([]Listener, error) {
+	rs, err := c.Do(ctx,
+		Call{"x:NetworkListener/query", map[string]any{}, "0"},
+		Call{"x:NetworkListener/get", map[string]any{
+			"#ids":       map[string]any{"resultOf": "0", "name": "x:NetworkListener/query", "path": "/ids"},
+			"properties": []string{"name", "protocol", "tlsImplicit", "bind"},
+		}, "1"},
+	)
+	if err != nil {
+		return nil, err
+	}
+	var got struct {
+		List []Listener `json:"list"`
+	}
+	return got.List, json.Unmarshal(rs[1].Args, &got)
+}
+
+// HostListeners fits the listeners a server creates on its first configured
+// start to a server running on the host rather than in a container.
+//
+// In a container they are all on [::] inside the container, and only what
+// the compose file publishes is reachable. On the host there is nothing in
+// between, so the defaults would put plain HTTP on every interface at 8080,
+// where the webmail listens, and take 443, which belongs to the proxy. So:
+//
+//   - plain HTTP moves to httpBind, on loopback, where the proxy and the
+//     webmail reach it -- the same place a container install publishes it;
+//   - the server's own HTTPS listener goes: the proxy terminates TLS for the
+//     server's names, as it does in front of a container;
+//   - with local, every other listener moves to loopback too, since a
+//     loopback evaluation publishes nothing.
+//
+// It takes effect at the next restart.
+func (c *Client) HostListeners(ctx context.Context, httpBind string, local bool) error {
+	ls, err := c.Listeners(ctx)
+	if err != nil {
+		return err
+	}
+	update, destroy := map[string]any{}, []string{}
+	for _, l := range ls {
+		switch {
+		case l.Protocol == "http" && l.TLSImplicit:
+			destroy = append(destroy, l.ID)
+		case l.Protocol == "http":
+			update[l.ID] = map[string]any{"bind": map[string]bool{httpBind: true}}
+		case local:
+			binds := map[string]bool{}
+			for addr := range l.Bind {
+				if i := strings.LastIndex(addr, ":"); i >= 0 {
+					binds["127.0.0.1"+addr[i:]] = true
+				}
+			}
+			update[l.ID] = map[string]any{"bind": binds}
+		}
+	}
+	if len(update) == 0 && len(destroy) == 0 {
+		return nil
+	}
+	args := map[string]any{}
+	if len(update) > 0 {
+		args["update"] = update
+	}
+	if len(destroy) > 0 {
+		args["destroy"] = destroy
+	}
+	rs, err := c.Do(ctx, Call{"x:NetworkListener/set", args, "0"})
+	if err != nil {
+		return err
+	}
+	_, err = DecodeSet(rs[0])
+	return err
 }

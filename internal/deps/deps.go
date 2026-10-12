@@ -333,6 +333,14 @@ func Fixable(needs []Need) bool {
 	return len(needs) > 0
 }
 
+// FetchVerified downloads url to dest, and puts it there only when its
+// SHA-256 is want. It is how everything this program installs from the
+// network arrives: against a checksum written into the source, never one
+// fetched from beside the download.
+func FetchVerified(ctx context.Context, log io.Writer, url, want, dest string, mode os.FileMode) error {
+	return fetchVerified(ctx, log, url, want, dest, mode)
+}
+
 func fetchVerified(ctx context.Context, log io.Writer, url, want, dest string, mode os.FileMode) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
