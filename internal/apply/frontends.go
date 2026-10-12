@@ -99,9 +99,33 @@ func unpack(ctx context.Context, tarball, dest, marker string) error {
 	return os.RemoveAll(old)
 }
 
+// markerFor is what the marker records: the checksum and its release, or
+// "local" for a tarball given by hand, which upgrade then always replaces.
+func markerFor(sum, version string) string {
+	if strings.HasPrefix(sum, "local:") {
+		return sum + " local"
+	}
+	return sum + " " + version
+}
+
 func unpacked(dest, marker string) bool {
+	return markerSum(dest) == marker && !strings.HasPrefix(marker, "local:")
+}
+
+// The marker is the tarball's checksum and, after it, the release it came
+// from: the checksum decides whether to unpack again, the version is what
+// status and upgrade show. An install from before the version was written
+// has the checksum alone.
+func markerSum(dest string) string {
 	b, err := os.ReadFile(filepath.Join(dest, releaseMarker))
-	return err == nil && strings.TrimSpace(string(b)) == marker && !strings.HasPrefix(marker, "local:")
+	if err != nil {
+		return ""
+	}
+	f := strings.Fields(string(b))
+	if len(f) == 0 {
+		return ""
+	}
+	return f[0]
 }
 
 // ---- the console ----
@@ -131,7 +155,7 @@ func (c hostConsole) Install(ctx context.Context, serverURL string) error {
 		if err := os.MkdirAll(c.deploy, 0o750); err != nil {
 			return err
 		}
-		if err := unpack(ctx, path, c.dir(), mark); err != nil {
+		if err := unpack(ctx, path, c.dir(), markerFor(mark, release.ConsoleVersion)); err != nil {
 			return err
 		}
 	}
@@ -191,7 +215,7 @@ func (w hostWebmail) Install(ctx context.Context) error {
 		if err := os.MkdirAll(w.deploy, 0o750); err != nil {
 			return err
 		}
-		if err := unpack(ctx, path, w.dir(), mark); err != nil {
+		if err := unpack(ctx, path, w.dir(), markerFor(mark, release.WebmailVersion)); err != nil {
 			return err
 		}
 		w.log.Info("%s (owned by root: the webmail reads it and can't change it)", w.dir())

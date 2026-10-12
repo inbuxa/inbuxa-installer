@@ -47,6 +47,9 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa plan -f FILE        what a topology file would change here
   inbuxa apply -f FILE       make this machine match that file
   inbuxa status              what is installed here, and whether it agrees
+  inbuxa upgrade [component…]  move what is here to the releases this
+                             installer installs: --dry-run, --yes,
+                             --no-backup
   inbuxa export [-o FILE]    write a topology file from what is here
   inbuxa version             this program's version
 
@@ -125,6 +128,8 @@ func main() {
 		os.Exit(exportCmd(os.Args[2:]))
 	case "status":
 		os.Exit(statusCmd())
+	case "upgrade":
+		os.Exit(upgradeCmd(os.Args[2:]))
 	case "version":
 		fmt.Println(version)
 	case "-h", "--help", "help":
@@ -650,6 +655,106 @@ func exportCmd(args []string) int {
 	return 0
 }
 
+// upgradeCmd moves what is installed here to the releases this installer
+// pins: the server first, each checked and put back if it fails, the
+// server's data archived before it unless --no-backup says not to.
+func upgradeCmd(args []string) int {
+	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	dryRun := fs.Bool("dry-run", false, "")
+	yes := fs.Bool("yes", false, "")
+	noBackup := fs.Bool("no-backup", false, "")
+	// Components and options in any order: `upgrade server --yes` as well as
+	// `upgrade --yes server`. The flag package stops at the first argument
+	// that isn't an option, so parse again after each one.
+	var names []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return 2
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		names = append(names, fs.Arg(0))
+		args = fs.Args()[1:]
+	}
+	want := map[string]bool{}
+	for _, a := range names {
+		c, err := shapeComponent(a)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			return 2
+		}
+		want[c] = true
+	}
+	st, err := state.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	if !st.Installed() {
+		fmt.Fprintln(os.Stderr, "nothing is installed here to upgrade")
+		return 1
+	}
+	var steps []apply.Step
+	for _, s := range apply.UpgradePlan(st) {
+		if len(want) == 0 || want[string(s.Component)] {
+			steps = append(steps, s)
+		}
+	}
+	due := 0
+	fmt.Printf("Upgrade with installer %s\n\n", version)
+	for _, s := range steps {
+		mark := "already " + s.To
+		if s.Due() {
+			mark = s.From + " -> " + s.To
+			due++
+		}
+		fmt.Printf("  %-8s %-10s %s\n", s.Component, s.Shape, mark)
+	}
+	if due == 0 {
+		fmt.Println("\nNothing to do: this is what this installer installs. A newer installer brings newer releases.")
+		return 0
+	}
+	backup := !*noBackup
+	for _, s := range steps {
+		if s.Component == plan.Server && s.Due() {
+			if backup {
+				fmt.Printf("\nThe server is stopped and its data archived into %s first: a new release\nmay convert its store on first start, and that can't be undone.\n", filepath.Join(st.Dir, "backups"))
+			} else {
+				fmt.Println("\nThe server's data will not be archived first (--no-backup).")
+			}
+		}
+	}
+	if *dryRun {
+		return 0
+	}
+	if !*yes {
+		fmt.Fprintln(os.Stderr, "\nNothing has happened yet. Pass --yes to carry this out.")
+		return 1
+	}
+	f := host.Survey(context.Background())
+	if !f.Root {
+		fmt.Fprintln(os.Stderr, "upgrading needs root")
+		return 1
+	}
+	fmt.Println("\nUpgrading:")
+	if err := apply.RunUpgrade(context.Background(), st, steps, backup, f, &printer{}); err != nil {
+		fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
+		return 1
+	}
+	fmt.Println("\nDone.")
+	return 0
+}
+
+func shapeComponent(s string) (string, error) {
+	switch strings.ToLower(s) {
+	case "server", "console", "webmail":
+		return strings.ToLower(s), nil
+	}
+	return "", fmt.Errorf("%q is not a component: server, console or webmail", s)
+}
+
 // statusCmd is the same reading as export, shown to a person: what is
 // installed, what is running, and where the two disagree.
 func statusCmd() int {
@@ -705,6 +810,17 @@ func statusCmd() int {
 			fmt.Printf("  %-8s %-24s %s\n", kind, "on the host", state)
 		default:
 			fmt.Printf("  %-8s %-24s %s\n", kind, "in the deployment", state)
+		}
+	}
+
+	if steps := apply.UpgradePlan(st); len(steps) > 0 {
+		fmt.Println("\nVersions")
+		for _, s := range steps {
+			line := s.From
+			if s.Due() {
+				line += "   (this installer installs " + s.To + ": inbuxa upgrade)"
+			}
+			fmt.Printf("  %-8s %s\n", s.Component, line)
 		}
 	}
 

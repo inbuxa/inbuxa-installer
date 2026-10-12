@@ -110,14 +110,26 @@ This is early. What is built:
   diffs the file against what is actually installed here and changes
   nothing; `apply` converges to it, adding and removing components;
   `export` writes the file from what is already here.
+- **`upgrade [server|console|webmail]`** -- moves what is installed here to
+  the releases this installer installs; a newer installer brings newer
+  releases. `--dry-run` shows each component's move first (so does
+  `status`). The server goes first, then the console, then the webmail,
+  each checked once it is running again and put back as it was if not,
+  which stops the upgrade there: a container by its old image tag, the
+  server on the host by its old binary (kept as `inbuxa-server.<version>`),
+  the console and the webmail on the host by their old directory. Before
+  the server, which may convert its store on first start, it is stopped and
+  its own data archived into `<dir>/backups` (`--no-backup` to skip; a store
+  kept elsewhere, PostgreSQL or S3, is backed up where it lives).
+
 - **`status`** -- what is installed, what is running, and where those two
   disagree: a container stopped by hand, or a deployment nothing recorded
   installing. It exits non-zero when they disagree, so a machine can be
   asked in a script whether it still matches itself.
 
 Not built yet: `join` in the interface (it is a command for now) and of
-front ends on the host, `upgrade`, `uninstall`, and moving the server
-between a container and the host. The design is in the inbuxa specification (§6.1 and
+front ends on the host, `uninstall`, `certs`, and moving the server between
+a container and the host. The design is in the inbuxa specification (§6.1 and
 the installer draft); the phases are there too.
 
     inbuxa install --local --domain example.test --install-deps --yes
@@ -162,6 +174,12 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/run.sh e2e/cases/proxy-snippets.sh  behind nginx, from the configuration it writes
     e2e/vm/run.sh e2e/cases/webmail-host.sh    the webmail on the host, and signing in to it
     e2e/vm/run.sh e2e/cases/all-host.sh        everything on the host, behind nginx, no containers
+    OLD_REF=v2026.10.12.1 e2e/vm/run.sh e2e/cases/upgrade-containers.sh
+                                              an older install moved to these releases
+    OLD_REF=v2026.10.12.1 e2e/vm/run.sh e2e/cases/upgrade-host-server.sh
+                                              the same on the host, and a bad release put back
+    CONSOLE_TARBALL=… WEBMAIL_TARBALL=… e2e/vm/run.sh e2e/cases/upgrade-frontends-host.sh
+                                              the console and the webmail on the host, moved on
     e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
     e2e/vm/run.sh e2e/cases/status-export.sh  intent against reality, and the file
     OLD_REF=<commit> e2e/vm/run.sh e2e/cases/upgrade-volumes.sh
