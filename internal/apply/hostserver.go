@@ -79,31 +79,35 @@ func (h hostServer) envPath() string    { return filepath.Join(h.deploy, "server
 func (h hostServer) DataPath() string { return filepath.Join(h.home(), "data") + "/" }
 
 // Install puts the release binary, the user and the directories in place. It
-// changes nothing that is already right, so a converge can call it too.
-func (h hostServer) Install(ctx context.Context) error {
+// changes nothing that is already right, so a converge can call it too, and
+// says whether it replaced the binary, which a running server only picks up
+// on a restart.
+func (h hostServer) Install(ctx context.Context) (replaced bool, err error) {
 	if path := os.Getenv("INBUXA_SERVER_BINARY"); path != "" {
 		// A server build to test, in place of the release. Said loudly,
 		// because nothing vouches for it the way the pinned checksum
 		// vouches for a release.
 		h.log.Step("installing %s instead of the release, as INBUXA_SERVER_BINARY says (no checksum)", path)
 		if out, err := exec.CommandContext(ctx, path, "--version").CombinedOutput(); err != nil {
-			return fmt.Errorf("%s does not run here: %s", path, strings.TrimSpace(string(out)))
+			return false, fmt.Errorf("%s does not run here: %s", path, strings.TrimSpace(string(out)))
 		}
 		if err := runQuiet(ctx, "install", "-m", "0755", path, HostServerBinary); err != nil {
-			return err
+			return false, err
 		}
+		replaced = true
 	} else if v := binaryVersion(ctx, HostServerBinary); strings.Contains(v, release.ServerVersion) {
 		h.log.Info("%s is already %s", HostServerBinary, release.ServerVersion)
 	} else {
 		if err := h.fetchBinary(ctx); err != nil {
-			return err
+			return false, err
 		}
+		replaced = true
 	}
 
 	if err := exec.CommandContext(ctx, "getent", "passwd", HostServerUser).Run(); err != nil {
 		if err := runQuiet(ctx, "useradd", "--system", "--user-group", "--no-create-home",
 			"--home-dir", h.home(), "--shell", nologin(), HostServerUser); err != nil {
-			return fmt.Errorf("creating the %s user: %w", HostServerUser, err)
+			return false, fmt.Errorf("creating the %s user: %w", HostServerUser, err)
 		}
 		h.log.Info("user %s (system, no login)", HostServerUser)
 	}
@@ -112,20 +116,20 @@ func (h hostServer) Install(ctx context.Context) error {
 	// are 0600 on their own; the server only needs to pass through it to
 	// reach its own directory.
 	if err := os.MkdirAll(h.deploy, 0o750); err != nil {
-		return err
+		return false, err
 	}
 	if err := os.Chmod(h.deploy, 0o711); err != nil {
-		return err
+		return false, err
 	}
 	for _, d := range []string{h.home(), h.DataPath()} {
 		if err := os.MkdirAll(d, 0o750); err != nil {
-			return err
+			return false, err
 		}
 		if err := runQuiet(ctx, "chown", HostServerUser+":"+HostServerUser, d); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return replaced, nil
 }
 
 func (h hostServer) fetchBinary(ctx context.Context) error {
@@ -179,9 +183,9 @@ func (h hostServer) WriteEnv(vars map[string]string) (bool, error) {
 	return writeIfChanged(h.envPath(), b.String(), 0o600)
 }
 
-// WriteUnit writes the unit. configured adds the condition that a finished
-// install keeps: no configuration file, no start.
-func (h hostServer) WriteUnit(ctx context.Context, configured bool) error {
+// WriteUnit writes the unit and says whether it changed. configured adds the
+// condition that a finished install keeps: no configuration file, no start.
+func (h hostServer) WriteUnit(ctx context.Context, configured bool) (bool, error) {
 	cond := ""
 	if configured {
 		cond = "# A server that has lost its configuration stays down rather than coming\n" +
@@ -220,14 +224,14 @@ WantedBy=multi-user.target
 `, cond, HostServerUser, HostServerUser, h.envPath(), HostServerBinary, h.configPath(), h.home())
 	changed, err := writeIfChanged(hostUnitPath, unit, 0o644)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if changed {
 		if err := runQuiet(ctx, "systemctl", "daemon-reload"); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return runQuiet(ctx, "systemctl", "enable", "--quiet", HostServerUnit)
+	return changed, runQuiet(ctx, "systemctl", "enable", "--quiet", HostServerUnit)
 }
 
 // Start (re)starts the server for a step of first boot, or as it runs from

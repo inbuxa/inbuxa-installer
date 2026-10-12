@@ -190,6 +190,8 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
                                               the same on the host, and a bad release put back
     CONSOLE_TARBALL=… WEBMAIL_TARBALL=… e2e/vm/run.sh e2e/cases/upgrade-frontends-host.sh
                                               the console and the webmail on the host, moved on
+    OLD_REF=v2026.10.12.3 e2e/vm/run.sh e2e/cases/rerun-host-server.sh
+                                              install run again: restarted when it must be, only then
     e2e/vm/run.sh e2e/cases/uninstall-containers.sh  uninstalled, installed again on the data, purged
     e2e/vm/run.sh e2e/cases/uninstall-host.sh  the same with the server and the webmail on the host
     e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
