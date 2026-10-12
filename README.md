@@ -132,13 +132,25 @@ This is early. What is built:
   delete. Docker, and the configuration your own web server loads, are left
   alone. To take one component off, run `install` again with it skipped.
 
+- **`certs [--key KEY]`** -- the mail server's own certificate, the one its
+  mail ports present: who issued it, until when, for which names, whether
+  it verifies, and where the mail host resolves. Reading it needs nothing.
+  Fixing it needs an API key made in the console, as `join` does (`--key -`
+  or `INBUXA_API_KEY`; never written down): a new ACME order, which the
+  server doesn't start again by itself once one has failed -- typically
+  because DNS wasn't in place during the install -- or, on a domain not yet
+  on ACME, ACME turned on where the managed Caddy or your own web server
+  passes the challenges. It waits for the mail ports to present the new
+  certificate. The console's and the webmail's certificates are the
+  proxy's, which renews them itself.
+
 - **`status`** -- what is installed, what is running, and where those two
   disagree: a container stopped by hand, or a deployment nothing recorded
   installing. It exits non-zero when they disagree, so a machine can be
   asked in a script whether it still matches itself.
 
 Not built yet: `join` in the interface (it is a command for now) and of
-front ends on the host, `certs`, and moving the server between a container
+front ends on the host, and moving the server between a container
 and the host. The design is in the inbuxa specification (§6.1 and
 the installer draft); the phases are there too.
 
@@ -194,6 +206,7 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
                                               install run again: restarted when it must be, only then
     e2e/vm/run.sh e2e/cases/uninstall-containers.sh  uninstalled, installed again on the data, purged
     e2e/vm/run.sh e2e/cases/uninstall-host.sh  the same with the server and the webmail on the host
+    e2e/vm/run.sh e2e/cases/certs.sh          a failed order, reported, then fixed with a key
     e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
     e2e/vm/run.sh e2e/cases/status-export.sh  intent against reality, and the file
     OLD_REF=<commit> e2e/vm/run.sh e2e/cases/upgrade-volumes.sh

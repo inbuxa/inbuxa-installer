@@ -575,7 +575,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	// intent rather than guessing from what happens to be up.
 	st, err := state.Load()
 	if err == nil {
-		st.Machine, st.Dir, st.Domain = o.Machine, dir, o.Domain
+		st.Machine, st.Dir, st.Domain, st.MailHost, st.Local = o.Machine, dir, o.Domain, o.MailHost, o.Local
 		st.Runtime, st.Topology = f.Runtime.Kind, o.TopologyPath
 		st.Shapes = map[string]string{}
 		for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
@@ -746,7 +746,7 @@ func convergeHost(ctx context.Context, o plan.Options, stack compose.Stack, cmp 
 }
 
 func saveState(st *state.State, o plan.Options, f host.Facts, log Log) {
-	st.Machine, st.Dir, st.Domain = o.Machine, o.Dir, o.Domain
+	st.Machine, st.Dir, st.Domain, st.MailHost, st.Local = o.Machine, o.Dir, o.Domain, o.MailHost, o.Local
 	st.Runtime, st.Topology = f.Runtime.Kind, o.TopologyPath
 	st.Installer = "server " + release.ServerVersion
 	st.RemovedAt = nil // installed again, on what was kept

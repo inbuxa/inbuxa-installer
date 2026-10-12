@@ -12,6 +12,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/apply"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/deps"
@@ -52,6 +54,9 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
                              --no-backup
   inbuxa uninstall           take the programs away, keep the data:
                              --dry-run, --yes, --purge (the data too)
+  inbuxa certs [--key KEY]   the mail server's certificate: what its mail
+                             ports present, and with an API key a new
+                             order when it needs one
   inbuxa export [-o FILE]    write a topology file from what is here
   inbuxa version             this program's version
 
@@ -89,6 +94,16 @@ join flags:
                              server already lists
   --exempt-address IP        the address the server sees the webmail at, when
                              it is not what the webmail's name resolves to
+
+certs flags:
+  --key KEY                  an API key made in the console by a server
+                             administrator, needed only to change anything;
+                             "-" reads it from standard input, and
+                             INBUXA_API_KEY works too
+  --mail-host NAME           the server's name, if the install didn't record it
+  --email ADDRESS            the ACME contact, if ACME is turned on here;
+                             default: postmaster@DOMAIN
+  --dry-run                  report, and say what it would do
 
 deps flags:
   --server/--console/--webmail SHAPE   the shapes to work out the needs for
@@ -134,6 +149,8 @@ func main() {
 		os.Exit(upgradeCmd(os.Args[2:]))
 	case "uninstall":
 		os.Exit(uninstallCmd(os.Args[2:]))
+	case "certs":
+		os.Exit(certsCmd(os.Args[2:]))
 	case "version":
 		fmt.Println(version)
 	case "-h", "--help", "help":
@@ -818,6 +835,120 @@ func uninstallCmd(args []string) int {
 	fmt.Println("\nDone.")
 	return 0
 }
+
+func certsCmd(args []string) int {
+	fs := flag.NewFlagSet("certs", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	var (
+		key      = fs.String("key", os.Getenv("INBUXA_API_KEY"), "")
+		mailHost = fs.String("mail-host", "", "")
+		email    = fs.String("email", "", "")
+		acmeDir  = fs.String("acme-directory", "", "")
+		dryRun   = fs.Bool("dry-run", false, "")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	ctx := context.Background()
+	st, err := state.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	if _, ok := st.Shapes["server"]; !ok || st.Removed() {
+		fmt.Println("The mail server isn't installed on this machine, so its certificate is looked after where it runs.")
+		if st.ServerURL != "" {
+			fmt.Println("The console's and the webmail's certificates here are Caddy's, which renews them itself.")
+		}
+		return 0
+	}
+	if apply.LocalInstall(st) {
+		fmt.Println("This is a --local install: the mail ports are on loopback and have the server's own")
+		fmt.Println("self-signed certificate, which is all a local evaluation needs. A real certificate comes")
+		fmt.Println("with installing for a domain that points here.")
+		return 0
+	}
+	f := host.Survey(ctx)
+	found := discover.Run(ctx, f, st.Dir)
+	o := apply.CertsOptions{
+		MailHost: apply.CertsMailHost(*mailHost, st, found.MailHost),
+		Email:    *email, ACMEDirectory: *acmeDir,
+	}
+	switch {
+	case found.Proxy:
+		o.Proxy = "caddy"
+	case fileExists(filepath.Join(st.Dir, "proxy", "nginx-inbuxa.conf")):
+		o.Proxy = "snippets"
+	}
+
+	roots := apply.CertRoots(st.Dir)
+	s, err := apply.ReadServed(ctx, o.MailHost, roots)
+	problem := ""
+	if err != nil {
+		problem = err.Error()
+	} else {
+		fmt.Printf("The mail server's certificate for %s, as port %s presents it:\n", o.MailHost, s.Port)
+		issuer := s.Issuer
+		if s.SelfSigned {
+			issuer = "itself (self-signed)"
+		}
+		until := s.NotAfter.Format("2006-01-02")
+		// A self-signed certificate is often dated to the end of time, where
+		// a count of days says nothing.
+		if days := int(time.Until(s.NotAfter).Hours() / 24); days < 3650 {
+			until += fmt.Sprintf(" (%d days)", days)
+		}
+		fmt.Printf("  issued by    %s\n  valid until  %s\n  names        %s\n",
+			issuer, until, strings.Join(s.Names, ", "))
+		problem = s.Problem(o.MailHost, time.Now())
+	}
+	if addrs, err := net.DefaultResolver.LookupHost(ctx, o.MailHost); err == nil && len(addrs) > 0 {
+		fmt.Printf("\n%s resolves to %s.\n", o.MailHost, strings.Join(addrs, ", "))
+	} else {
+		fmt.Printf("\n%s doesn't resolve. A certificate can't be issued until it points here: the records\n"+
+			"are in %s.\n", o.MailHost, filepath.Join(st.Dir, "dns.zone"))
+	}
+	if problem == "" {
+		fmt.Println("\nNothing to do: the server renews it itself, well before it expires.")
+		return 0
+	}
+	fmt.Printf("\nThe problem: %s.\n", problem)
+	if *dryRun {
+		fmt.Println("\nWith an API key, this would start a new certificate order for " + o.MailHost + " and wait for it.")
+		return 0
+	}
+	if *key == "-" {
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil && line == "" {
+			fmt.Fprintln(os.Stderr, "reading the key from standard input: "+err.Error())
+			return 2
+		}
+		*key = strings.TrimSpace(line)
+	}
+	if *key == "" {
+		fmt.Println("\nA new order needs an API key: make one in the console (your account, API keys), then")
+		fmt.Println("  sudo inbuxa certs --key -")
+		fmt.Println("and paste it, or set INBUXA_API_KEY. It isn't kept.")
+		return 1
+	}
+	fmt.Println()
+	o.Key = *key
+	if _, err := apply.Renew(ctx, st, o, &printer{}); err != nil {
+		fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
+		if !errors.Is(err, apply.ErrKeyRefused) {
+			fmt.Fprintln(os.Stderr, "    the server's log says why: "+apply.CertsLogHint(st))
+		}
+		return 1
+	}
+	s, _ = apply.ReadServed(ctx, o.MailHost, roots)
+	if s != nil {
+		fmt.Printf("\nDone: port %s now presents a certificate for %s from %s, valid until %s.\n",
+			s.Port, o.MailHost, s.Issuer, s.NotAfter.Format("2006-01-02"))
+	}
+	return 0
+}
+
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
 func shapeComponent(s string) (string, error) {
 	switch strings.ToLower(s) {

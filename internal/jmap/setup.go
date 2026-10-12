@@ -184,10 +184,9 @@ func (c *Client) EnableACME(ctx context.Context, domainID, directory, contact st
 	return id, nil
 }
 
-// RetryCertificates starts a fresh ACME order for the domain. A failed order
-// is not retried on a restart; moving the domain to manual and straight back
-// is what starts a new one.
-func (c *Client) RetryCertificates(ctx context.Context, domainID string) error {
+// CertificateManagement says how the domain's certificates are managed:
+// "Automatic" with the ACME provider's id, or "Manual" with none.
+func (c *Client) CertificateManagement(ctx context.Context, domainID string) (kind, providerID string, err error) {
 	var got struct {
 		List []struct {
 			CertificateManagement struct {
@@ -198,18 +197,29 @@ func (c *Client) RetryCertificates(ctx context.Context, domainID string) error {
 	}
 	rs, err := c.Do(ctx, Call{"x:Domain/get", map[string]any{"ids": []string{domainID}, "properties": []string{"certificateManagement"}}, "0"})
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	if err := json.Unmarshal(rs[0].Args, &got); err != nil || len(got.List) != 1 {
-		return errors.New("x:Domain/get did not return the domain")
+		return "", "", errors.New("x:Domain/get did not return the domain")
 	}
 	cm := got.List[0].CertificateManagement
-	if cm.Type != "Automatic" || cm.AcmeProviderID == "" {
-		return fmt.Errorf("the domain's certificates are %q, not managed by ACME", cm.Type)
+	return cm.Type, cm.AcmeProviderID, nil
+}
+
+// RetryCertificates starts a fresh ACME order for the domain. A failed order
+// is not retried on a restart; moving the domain to manual and straight back
+// is what starts a new one.
+func (c *Client) RetryCertificates(ctx context.Context, domainID string) error {
+	kind, providerID, err := c.CertificateManagement(ctx, domainID)
+	if err != nil {
+		return err
 	}
-	rs, err = c.Do(ctx,
+	if kind != "Automatic" || providerID == "" {
+		return fmt.Errorf("the domain's certificates are %q, not managed by ACME", kind)
+	}
+	rs, err := c.Do(ctx,
 		Call{"x:Domain/set", map[string]any{"update": map[string]any{domainID: map[string]any{"certificateManagement": map[string]any{"@type": "Manual"}}}}, "0"},
-		Call{"x:Domain/set", map[string]any{"update": map[string]any{domainID: automaticCertificates(cm.AcmeProviderID)}}, "1"},
+		Call{"x:Domain/set", map[string]any{"update": map[string]any{domainID: automaticCertificates(providerID)}}, "1"},
 	)
 	if err != nil {
 		return err
