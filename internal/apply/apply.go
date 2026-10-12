@@ -221,16 +221,22 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	// The server on the host: what a container would have brought with it.
 	var hs *hostServer
 	var srvLogs logSource = cmp
+	// Whether the binary or its environment changed under a server that is
+	// already running, which only a restart makes it see.
+	serverChanged := false
 	if onHost {
 		hs = &hostServer{deploy: dir, log: log}
 		srvLogs = hs
 		log.Step("installing the mail server on this machine")
-		if err := hs.Install(ctx); err != nil {
+		replaced, err := hs.Install(ctx)
+		if err != nil {
 			return nil, err
 		}
-		if _, err := hs.WriteEnv(serverEnv(o, stack, sec)); err != nil {
+		envChanged, err := hs.WriteEnv(serverEnv(o, stack, sec))
+		if err != nil {
 			return nil, err
 		}
+		serverChanged = replaced || envChanged
 		log.Info("%s, %s", hostUnitPath, hs.envPath())
 	}
 
@@ -269,7 +275,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	// moment it was configured -- which is exactly what adding or removing a
 	// front end used to do, and why it could not.
 	if existing, err := state.Load(); err == nil && existing.Installed() {
-		res, err := converge(ctx, o, stack, cmp, hs, existing, f, log)
+		res, err := converge(ctx, o, stack, cmp, hs, serverChanged, existing, f, log)
 		if err == nil && hw != nil {
 			// Its files may be new, or what it reads at start; or it may
 			// simply not be running.
@@ -311,7 +317,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		// Its default listeners until they are fitted to the host, behind a
 		// drop-in that keeps everything but loopback out meanwhile.
 		serverURL = hostSetupBind
-		if err := hs.WriteUnit(ctx, false); err != nil {
+		if _, err := hs.WriteUnit(ctx, false); err != nil {
 			return nil, err
 		}
 		if err := hs.Start(ctx, modeBootstrap, bootPass); err != nil {
@@ -410,7 +416,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		if o.Local {
 			log.Info("the mail ports on loopback only")
 		}
-		if err := hs.WriteUnit(ctx, true); err != nil {
+		if _, err := hs.WriteUnit(ctx, true); err != nil {
 			return res, err
 		}
 		if err := hs.Start(ctx, modeNormal, ""); err != nil {
@@ -629,7 +635,7 @@ func waitForCertificate(ctx context.Context, srv *jmap.Client, log Log, domainID
 // Nothing touches the mail: data volumes are left alone, and a component
 // that is removed can be added back with what it had.
 func converge(ctx context.Context, o plan.Options, stack compose.Stack, cmp docker.Compose, hs *hostServer,
-	st *state.State, f host.Facts, log Log) (*Result, error) {
+	serverChanged bool, st *state.State, f host.Facts, log Log) (*Result, error) {
 
 	res := &Result{
 		Dir: o.Dir, ConsoleURL: stack.ConsoleURL, WebmailURL: stack.WebmailURL,
@@ -644,7 +650,7 @@ func converge(ctx context.Context, o plan.Options, stack compose.Stack, cmp dock
 	}
 
 	if hs != nil {
-		return convergeHost(ctx, o, stack, cmp, hs, st, f, log, res)
+		return convergeHost(ctx, o, stack, cmp, hs, serverChanged, st, f, log, res)
 	}
 
 	// Before anything is recreated: an install from before #5 keeps the
@@ -700,14 +706,13 @@ func converge(ctx context.Context, o plan.Options, stack compose.Stack, cmp dock
 // convergeHost is converge for a server on the host: the binary, the unit
 // and its environment are rewritten if they changed, whatever runs in
 // containers beside it is brought in line, and the server is restarted only
-// if what it reads at start is different.
+// if what it reads at start is different. serverChanged is Run's word on the
+// binary and the environment, which it wrote before getting here.
 func convergeHost(ctx context.Context, o plan.Options, stack compose.Stack, cmp docker.Compose, hs *hostServer,
-	st *state.State, f host.Facts, log Log, res *Result) (*Result, error) {
+	serverChanged bool, st *state.State, f host.Facts, log Log, res *Result) (*Result, error) {
 
-	// Run already wrote the environment; reading it back as it was before is
-	// not possible, so whether it changed is decided by the shapes, as for a
-	// container.
-	if err := hs.WriteUnit(ctx, true); err != nil {
+	unitChanged, err := hs.WriteUnit(ctx, true)
+	if err != nil {
 		return res, err
 	}
 	log.Step("bringing the stack in line with the file")
@@ -725,7 +730,7 @@ func convergeHost(ctx context.Context, o plan.Options, stack compose.Stack, cmp 
 	}
 	_, active := discover.HostServer(ctx)
 	frontEnds := st.Shapes["console"] != string(o.Shape(plan.Console)) || st.Shapes["webmail"] != string(o.Shape(plan.Webmail))
-	if frontEnds || !active {
+	if frontEnds || serverChanged || unitChanged || !active {
 		log.Info("restarting the server")
 		if err := hs.Restart(ctx); err != nil {
 			return res, withLogs(ctx, err, hs, "server")
