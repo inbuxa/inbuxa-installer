@@ -122,14 +122,24 @@ This is early. What is built:
   its own data archived into `<dir>/backups` (`--no-backup` to skip; a store
   kept elsewhere, PostgreSQL or S3, is backed up where it lives).
 
+- **`uninstall [--purge]`** -- takes away what the installer put on this
+  machine: containers, units, binaries (and the old ones kept for rollback),
+  the console's and the webmail's files, the webmail's user, its Node. The
+  data stays -- the server's volumes or directory, Caddy's certificates, the
+  credentials and secrets -- with the install record marked removed, so
+  `install` run again with the same options brings it all back. `--purge`
+  removes the data too, all but `<dir>/backups`, which it names for you to
+  delete. Docker, and the configuration your own web server loads, are left
+  alone. To take one component off, run `install` again with it skipped.
+
 - **`status`** -- what is installed, what is running, and where those two
   disagree: a container stopped by hand, or a deployment nothing recorded
   installing. It exits non-zero when they disagree, so a machine can be
   asked in a script whether it still matches itself.
 
 Not built yet: `join` in the interface (it is a command for now) and of
-front ends on the host, `uninstall`, `certs`, and moving the server between
-a container and the host. The design is in the inbuxa specification (§6.1 and
+front ends on the host, `certs`, and moving the server between a container
+and the host. The design is in the inbuxa specification (§6.1 and
 the installer draft); the phases are there too.
 
     inbuxa install --local --domain example.test --install-deps --yes
@@ -180,6 +190,8 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
                                               the same on the host, and a bad release put back
     CONSOLE_TARBALL=… WEBMAIL_TARBALL=… e2e/vm/run.sh e2e/cases/upgrade-frontends-host.sh
                                               the console and the webmail on the host, moved on
+    e2e/vm/run.sh e2e/cases/uninstall-containers.sh  uninstalled, installed again on the data, purged
+    e2e/vm/run.sh e2e/cases/uninstall-host.sh  the same with the server and the webmail on the host
     e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
     e2e/vm/run.sh e2e/cases/status-export.sh  intent against reality, and the file
     OLD_REF=<commit> e2e/vm/run.sh e2e/cases/upgrade-volumes.sh

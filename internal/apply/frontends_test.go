@@ -88,3 +88,24 @@ func TestUnpackReplacesOnlyWhenComplete(t *testing.T) {
 		t.Error("a failed unpack disturbed what was there")
 	}
 }
+
+// The webmail's client is registered from the server's environment: a
+// webmail in either shape needs its secret there, or it answers and signs
+// nobody in. (2026.10.12.3 left it out for a webmail on the host beside a
+// server on the host.)
+func TestAServerOnTheHostIsGivenTheWebmailsSecretInEitherShape(t *testing.T) {
+	sec := compose.Secrets{WebmailOAuth: "w"}
+	o := plan.Options{Dir: "/var/lib/inbuxa"}
+	for _, s := range []compose.Stack{
+		{HostServer: true, Webmail: true, WebmailURL: "https://webmail.example.org"},
+		{HostServer: true, WebmailUnit: true, WebmailURL: "https://webmail.example.org"},
+	} {
+		env := serverEnv(o, s, sec)
+		if env["INBUXA_WEBMAIL_CLIENT_SECRET"] != "w" || env["INBUXA_WEBMAIL_URL"] != "https://webmail.example.org" {
+			t.Errorf("webmail container=%v unit=%v: %v", s.Webmail, s.WebmailUnit, env)
+		}
+	}
+	if env := serverEnv(o, compose.Stack{HostServer: true}, sec); env["INBUXA_WEBMAIL_CLIENT_SECRET"] != "" {
+		t.Errorf("no webmail, and a secret anyway: %v", env)
+	}
+}

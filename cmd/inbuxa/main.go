@@ -50,6 +50,8 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa upgrade [component…]  move what is here to the releases this
                              installer installs: --dry-run, --yes,
                              --no-backup
+  inbuxa uninstall           take the programs away, keep the data:
+                             --dry-run, --yes, --purge (the data too)
   inbuxa export [-o FILE]    write a topology file from what is here
   inbuxa version             this program's version
 
@@ -130,6 +132,8 @@ func main() {
 		os.Exit(statusCmd())
 	case "upgrade":
 		os.Exit(upgradeCmd(os.Args[2:]))
+	case "uninstall":
+		os.Exit(uninstallCmd(os.Args[2:]))
 	case "version":
 		fmt.Println(version)
 	case "-h", "--help", "help":
@@ -692,7 +696,7 @@ func upgradeCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 1
 	}
-	if !st.Installed() {
+	if !st.Installed() || st.Removed() {
 		fmt.Fprintln(os.Stderr, "nothing is installed here to upgrade")
 		return 1
 	}
@@ -747,6 +751,74 @@ func upgradeCmd(args []string) int {
 	return 0
 }
 
+// uninstallCmd takes away what the installer put here. The data stays
+// unless --purge, and with it the install record, marked removed, so
+// install run again brings everything back.
+func uninstallCmd(args []string) int {
+	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	dryRun := fs.Bool("dry-run", false, "")
+	yes := fs.Bool("yes", false, "")
+	purge := fs.Bool("purge", false, "")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		c := fs.Arg(0)
+		fmt.Fprintf(os.Stderr, "uninstall takes away the whole installation. To take only the %s off this machine,\n"+
+			"run install again as before, with --%s skip: it converges, and removes it.\n", c, c)
+		return 2
+	}
+	st, err := state.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	if !st.Installed() || (st.Removed() && !*purge) {
+		fmt.Println("Nothing is installed here to take away.")
+		if st.Removed() {
+			fmt.Printf("The data of an earlier install is kept in %s; --purge removes that too.\n", st.Dir)
+		}
+		return 0
+	}
+	r := apply.UninstallPlan(st, *purge)
+	fmt.Println("Taken away:")
+	for _, x := range r.Remove {
+		fmt.Println("  - " + x)
+	}
+	if len(r.Keep) > 0 {
+		fmt.Println("\nKept:")
+		for _, x := range r.Keep {
+			fmt.Println("  - " + x)
+		}
+	}
+	if len(r.Notes) > 0 {
+		fmt.Println("\nWorth knowing:")
+		for _, x := range r.Notes {
+			fmt.Println("  - " + x)
+		}
+	}
+	if *dryRun {
+		return 0
+	}
+	if !*yes {
+		fmt.Fprintln(os.Stderr, "\nNothing has happened yet. Pass --yes to carry this out.")
+		return 1
+	}
+	f := host.Survey(context.Background())
+	if !f.Root {
+		fmt.Fprintln(os.Stderr, "uninstalling needs root")
+		return 1
+	}
+	fmt.Println("\nUninstalling:")
+	if err := apply.Uninstall(context.Background(), st, *purge, f, &printer{}); err != nil {
+		fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
+		return 1
+	}
+	fmt.Println("\nDone.")
+	return 0
+}
+
 func shapeComponent(s string) (string, error) {
 	switch strings.ToLower(s) {
 	case "server", "console", "webmail":
@@ -769,6 +841,12 @@ func statusCmd() int {
 
 	if !st.Installed() && found.Dir == "" {
 		fmt.Println("Nothing is installed on this machine.")
+		return 0
+	}
+	if st.Removed() {
+		fmt.Printf("Nothing is installed on this machine: uninstalled %s, with its data kept in %s.\n",
+			st.RemovedAt.Format("2006-01-02 15:04 UTC"), st.Dir)
+		fmt.Println("`inbuxa install` with the same options brings it back; `inbuxa uninstall --purge` removes the data.")
 		return 0
 	}
 
