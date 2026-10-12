@@ -11,10 +11,12 @@ package plan
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/deps"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/release"
 )
 
 // Component is one of the three programs.
@@ -157,6 +159,10 @@ func Available(f host.Facts, c Component, s Shape) Availability {
 		case Server:
 			// The binary is downloaded, not built here, so the machine has
 			// to be able to run it.
+			if _, ok := release.ServerSHA256[runtime.GOARCH]; !ok {
+				return Availability{Why: fmt.Sprintf("inbuxa-server %s has no release binary for %s; run the server as a container here",
+					release.ServerVersion, runtime.GOARCH)}
+			}
 			if f.Glibc.Version == "" {
 				return Availability{Why: "this machine's C library could not be read, and the server binary is linked against glibc " +
 					fmt.Sprintf("%d.%d", ServerGlibcMajor, ServerGlibcMinor)}
@@ -225,6 +231,11 @@ func Build(f host.Facts, o Options) (Plan, error) {
 	if chosen == 0 {
 		return p, fmt.Errorf("nothing chosen: pick at least one component")
 	}
+	// The proxy the installer manages is Caddy in a container, whatever the
+	// server is: a server on the host still needs a runtime for it.
+	if !o.Local && o.Proxy == "caddy" {
+		wantContainers = true
+	}
 
 	// What is missing is not the same as what is impossible. Docker absent on
 	// a Debian machine is one package and a service; Node too old is a pinned
@@ -286,7 +297,7 @@ func Build(f host.Facts, o Options) (Plan, error) {
 			p.Steps = append(p.Steps, Step{
 				Title: "Start the mail server as a container",
 				Detail: []string{
-					"image: registry.coffeylabs.org/inbuxa/inbuxa-server (pinned to a release tag)",
+					"image: " + release.ServerImage,
 					"volumes: inbuxa-data, inbuxa-etc",
 					"ports: 25, 465, 993, 995, 4190, and 8081 on loopback for the proxy",
 				},
@@ -295,9 +306,11 @@ func Build(f host.Facts, o Options) (Plan, error) {
 			p.Steps = append(p.Steps, Step{
 				Title: "Install the mail server on this machine",
 				Detail: []string{
-					"binary: /usr/local/bin/inbuxa-server, from the release on git.coffeylabs.org",
-					"user: inbuxa (system, no login), data in " + o.Dir + "/server",
-					"unit: /etc/systemd/system/inbuxa-server.service",
+					fmt.Sprintf("binary: /usr/local/bin/inbuxa-server, release %s for %s, checked against its pinned checksum",
+						release.ServerVersion, runtime.GOARCH),
+					"user: inbuxa (system, no login); configuration and data in " + o.Dir + "/server",
+					"unit: /etc/systemd/system/inbuxa-server.service, its environment in " + o.Dir + "/server.env",
+					"during setup it is reachable from this machine only; then its plain HTTP moves to 127.0.0.1:8081 and 443 is left to the proxy",
 				},
 			})
 		}

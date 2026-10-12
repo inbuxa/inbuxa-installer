@@ -39,9 +39,17 @@ type Stack struct {
 	ConsoleHost string
 	WebmailHost string
 
+	Server  bool // the server runs in this compose project
 	Console bool
 	Webmail bool
 	Proxy   bool
+
+	// HostServer is a mail server running on this machine but outside the
+	// project, under systemd. The front ends and the proxy then reach it on
+	// loopback, so the ones that talk to it -- the webmail and Caddy -- share
+	// the host's network instead of the project's. The console does not:
+	// only the browser talks to the server from it.
+	HostServer bool
 
 	ServerImage  string
 	ConsoleImage string
@@ -125,29 +133,18 @@ type Secrets struct {
 // goes, and the caller needs them: the mail server is told which addresses
 // the front ends speak from, and passing a copy meant telling it "".
 func Write(dir string, s *Stack) (Secrets, error) {
-	var sec Secrets
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	sec, err := EnsureSecrets(dir)
+	if err != nil {
 		return sec, err
 	}
 	if err := s.Addresses(); err != nil {
 		return sec, err
 	}
-
-	// Secrets are generated once and kept. Rewriting the deployment to add
-	// or remove a component must not roll the webmail's session key or the
-	// OAuth client secret the server was told: the point of converging is
-	// that everything not being changed stays as it was.
-	sec = readSecrets(filepath.Join(dir, ".env"))
-	var err error
-	if sec.AppSecret == "" {
-		if sec.AppSecret, err = secret(); err != nil {
-			return sec, err
-		}
-	}
-	if sec.WebmailOAuth == "" {
-		if sec.WebmailOAuth, err = secret(); err != nil {
-			return sec, err
-		}
+	if s.HostServer {
+		// Everything that talks to the server is on the host's network and
+		// arrives from loopback, which is the address the server is told to
+		// exempt from the auto-ban.
+		s.WebmailIP, s.CaddyIP = "127.0.0.1", "127.0.0.1"
 	}
 
 	funcs := template.FuncMap{"join": strings.Join}
@@ -171,13 +168,58 @@ func Write(dir string, s *Stack) (Secrets, error) {
 		}
 	}
 
-	// The secrets live beside the compose file, not in it, so the compose
-	// file can be read to somebody, pasted into an issue, or committed.
+	return sec, nil
+}
+
+// EnsureSecrets returns the deployment's secrets, generating and writing any
+// that do not exist yet. They are generated once and kept: rewriting the
+// deployment to add or remove a component must not roll the webmail's
+// session key or the OAuth client secret the server was told, because the
+// point of converging is that everything not being changed stays as it was.
+//
+// The secrets live in .env beside the compose file, not in it, so the compose
+// file can be read to somebody, pasted into an issue, or committed. A server
+// on the host reads the one it needs from there too.
+func EnsureSecrets(dir string) (Secrets, error) {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return Secrets{}, err
+	}
+	sec := readSecrets(filepath.Join(dir, ".env"))
+	var err error
+	if sec.AppSecret == "" {
+		if sec.AppSecret, err = secret(); err != nil {
+			return sec, err
+		}
+	}
+	if sec.WebmailOAuth == "" {
+		if sec.WebmailOAuth, err = secret(); err != nil {
+			return sec, err
+		}
+	}
 	env := fmt.Sprintf("APP_SECRET=%s\nWEBMAIL_CLIENT_SECRET=%s\n", sec.AppSecret, sec.WebmailOAuth)
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o600); err != nil {
 		return sec, err
 	}
 	return sec, nil
+}
+
+// Empty is whether the stack has nothing to run: a server on the host with no
+// front ends and no proxy here. Then there is no compose project at all.
+func (s Stack) Empty() bool {
+	return !s.Server && !s.Console && !s.Webmail && !s.Proxy
+}
+
+// Upstreams are where Caddy finds each program: by service name on the
+// project's network, or on loopback when it shares the host's.
+func (s Stack) ServerUpstream() string  { return s.pick("server:8080", "127.0.0.1:8081") }
+func (s Stack) WebmailUpstream() string { return s.pick("webmail:8080", "127.0.0.1:8080") }
+func (s Stack) ConsoleUpstream() string { return s.pick("console:8080", "127.0.0.1:8082") }
+
+func (s Stack) pick(project, host string) string {
+	if s.HostServer {
+		return host
+	}
+	return project
 }
 
 // readSecrets recovers what a previous run generated, so a converge keeps

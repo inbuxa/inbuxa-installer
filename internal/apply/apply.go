@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Coffey Labs LLC
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package apply carries out a plan, for the shapes that are containers.
+// Package apply carries out a plan: every component in a container, or the
+// mail server on the host with whatever runs beside it in containers.
 //
 // The sequence is SPEC.md 6.2's, which ihasmail-oneshot worked out against a
 // running server: bring the mail server up in bootstrap mode with a
@@ -29,10 +30,12 @@ import (
 
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/compose"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/deps"
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/discover"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/docker"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/jmap"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/plan"
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/release"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/state"
 )
 
@@ -41,7 +44,7 @@ import (
 // here would mean this program needing a release of its own for every one of
 // theirs.
 const (
-	DefaultServerImage  = "registry.coffeylabs.org/inbuxa/inbuxa-server:2026.10.10.1"
+	DefaultServerImage  = release.ServerImage
 	DefaultConsoleImage = "registry.coffeylabs.org/inbuxa/inbuxa-admin:2026.10.5"
 	DefaultWebmailImage = "registry.coffeylabs.org/inbuxa/inbuxa-webmail:2026.10.9-g62936ab"
 	DefaultCaddyImage   = "docker.io/library/caddy:2-alpine"
@@ -70,18 +73,25 @@ type Log interface {
 	Out() io.Writer
 }
 
-// Run carries out p. It refuses anything but container shapes for now, and
-// says so rather than pretending a host install happened.
+// Run carries out p. The console and the webmail are containers for now, and
+// it says so rather than pretending a host install of either happened.
 func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, error) {
 	o := p.Options
-	for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
+	for _, c := range []plan.Component{plan.Console, plan.Webmail} {
 		if o.Shape(c) == plan.Host {
-			return nil, fmt.Errorf("host installs are not built yet: %s was asked for as a host install", c)
+			return nil, fmt.Errorf("host installs of the console and the webmail are not built yet: %s was asked for as a host install", c)
 		}
 	}
-	if o.Shape(plan.Server) != plan.Container {
+	if o.Shape(plan.Server) == plan.Skip {
 		return nil, fmt.Errorf("this build installs the front ends only alongside a server it installs too; use join once that is built")
 	}
+	onHost := o.Shape(plan.Server) == plan.Host
+	if st, err := state.Load(); err == nil && st.Installed() && st.Shapes["server"] != "" && st.Shapes["server"] != string(o.Shape(plan.Server)) {
+		return nil, fmt.Errorf("the server is installed here as a %s install; moving it to a %s install is not built yet",
+			st.Shapes["server"], o.Shape(plan.Server))
+	}
+	needContainers := !onHost || o.Shape(plan.Console) == plan.Container ||
+		o.Shape(plan.Webmail) == plan.Container || (!o.Local && o.Proxy == "caddy")
 
 	if len(p.Needs) > 0 && o.InstallDeps {
 		log.Step("installing what this machine is missing")
@@ -93,7 +103,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		// with the old facts meant reaching for a docker that was never
 		// going to be there.
 		f = host.Survey(ctx)
-		if !f.Runtime.Usable {
+		if needContainers && !f.Runtime.Usable {
 			return nil, fmt.Errorf("after installing what was missing, containers still are not usable: %s", f.Runtime.Why)
 		}
 		log.Info("using %s %s", f.Runtime.Kind, f.Runtime.Version)
@@ -103,6 +113,8 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	stack := compose.Stack{
 		Version:      "dev",
 		Project:      "inbuxa",
+		Server:       !onHost,
+		HostServer:   onHost,
 		Domain:       o.Domain,
 		Email:        o.ACMEEmail,
 		Local:        o.Local,
@@ -155,9 +167,14 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, err
 		}
-		bundle, err := docker.SystemCABundle(ctx, stack.ServerImage)
+		var bundle []byte
+		if onHost {
+			bundle, err = systemCABundle()
+		} else {
+			bundle, err = docker.SystemCABundle(ctx, stack.ServerImage)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("reading the server image's CA bundle: %w", err)
+			return nil, fmt.Errorf("reading the server's CA bundle: %w", err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "ca-bundle.crt"), append(bundle, root...), 0o644); err != nil {
 			return nil, err
@@ -171,19 +188,59 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	stack.ACMEDirectory = o.ACMEDirectory
 
 	log.Step("writing the deployment into %s", dir)
-	if _, err := compose.Write(dir, &stack); err != nil {
-		return nil, err
+	var sec compose.Secrets
+	var err error
+	if stack.Empty() {
+		if sec, err = compose.EnsureSecrets(dir); err != nil {
+			return nil, err
+		}
+		log.Info(".env (nothing runs in containers here)")
+	} else {
+		if sec, err = compose.Write(dir, &stack); err != nil {
+			return nil, err
+		}
+		log.Info("compose.yaml, .env%s", map[bool]string{true: " and Caddyfile", false: ""}[stack.Proxy])
 	}
-	log.Info("compose.yaml, .env%s", map[bool]string{true: " and Caddyfile", false: ""}[stack.Proxy])
 
 	// Whichever runtime the survey found: docker where there is one, podman
 	// on the Red Hat family, driven through the same compose plugin.
 	docker.UseRuntime(f.Runtime)
 	cmp := docker.Compose{Dir: dir, Runtime: f.Runtime}
 
-	log.Step("fetching the images")
-	if err := cmp.Run(ctx, "pull", "--quiet"); err != nil {
-		return nil, err
+	if !stack.Empty() {
+		log.Step("fetching the images")
+		if err := cmp.Run(ctx, "pull", "--quiet"); err != nil {
+			return nil, err
+		}
+	}
+
+	// The server on the host: what a container would have brought with it.
+	var hs *hostServer
+	var srvLogs logSource = cmp
+	if onHost {
+		hs = &hostServer{deploy: dir, log: log}
+		srvLogs = hs
+		log.Step("installing the mail server on this machine")
+		if err := hs.Install(ctx); err != nil {
+			return nil, err
+		}
+		env := map[string]string{
+			"INBUXA_ADMIN_URL":   stack.ConsoleURL,
+			"INBUXA_WEBMAIL_URL": stack.WebmailURL,
+		}
+		if stack.Webmail {
+			env["INBUXA_WEBMAIL_CLIENT_SECRET"] = sec.WebmailOAuth
+		}
+		if o.Local {
+			env["INBUXA_PUBLIC_URL"] = stack.ServerPublicURL
+		}
+		if stack.CABundle {
+			env["SSL_CERT_FILE"] = filepath.Join(dir, "ca-bundle.crt")
+		}
+		if _, err := hs.WriteEnv(env); err != nil {
+			return nil, err
+		}
+		log.Info("%s, %s", hostUnitPath, hs.envPath())
 	}
 
 	// A machine that already runs this installation is converged, not set up
@@ -193,7 +250,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	// moment it was configured -- which is exactly what adding or removing a
 	// front end used to do, and why it could not.
 	if existing, err := state.Load(); err == nil && existing.Installed() {
-		return converge(ctx, o, stack, cmp, existing, f, log)
+		return converge(ctx, o, stack, cmp, hs, existing, f, log)
 	}
 
 	// The bootstrap credential lives in an override file for this step only,
@@ -212,18 +269,30 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	defer os.Remove(override)
 
 	log.Step("starting the mail server in bootstrap mode")
-	boot := cmp
-	boot.Files = []string{override}
-	boot.Env = []string{"INBUXA_BOOTSTRAP_ADMIN=admin:" + bootPass}
-	if err := boot.Run(ctx, "up", "-d", "server"); err != nil {
-		return nil, err
+	serverURL := "http://" + stack.ServerBind
+	if onHost {
+		// Its default listeners until they are fitted to the host, behind a
+		// drop-in that keeps everything but loopback out meanwhile.
+		serverURL = hostSetupBind
+		if err := hs.WriteUnit(ctx, false); err != nil {
+			return nil, err
+		}
+		if err := hs.Start(ctx, modeBootstrap, bootPass); err != nil {
+			return nil, withLogs(ctx, err, srvLogs, "server")
+		}
+	} else {
+		boot := cmp
+		boot.Files = []string{override}
+		boot.Env = []string{"INBUXA_BOOTSTRAP_ADMIN=admin:" + bootPass}
+		if err := boot.Run(ctx, "up", "-d", "server"); err != nil {
+			return nil, err
+		}
 	}
 
-	serverURL := "http://" + stack.ServerBind
 	if err := waitFor(ctx, log, "the mail server", 120*time.Second, func(ctx context.Context) error {
 		return live(ctx, serverURL)
 	}); err != nil {
-		return nil, withLogs(ctx, err, cmp, "server")
+		return nil, withLogs(ctx, err, srvLogs, "server")
 	}
 
 	bootClient := &jmap.Client{BaseURL: serverURL, Username: "admin", Password: bootPass}
@@ -232,7 +301,11 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	}
 
 	log.Step("setting up %s (hostname %s)", o.Domain, o.MailHost)
-	admin, err := bootClient.Bootstrap(ctx, o.MailHost, o.Domain)
+	dataPath := ""
+	if onHost {
+		dataPath = hs.DataPath()
+	}
+	admin, err := bootClient.Bootstrap(ctx, o.MailHost, o.Domain, dataPath)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: %w", err)
 	}
@@ -262,10 +335,16 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	}
 	defer os.Remove(basicOverride)
 	log.Step("restarting the mail server configured, to give the setup an API key")
-	basic := cmp
-	basic.Files = []string{basicOverride}
-	if err := basic.Run(ctx, "up", "-d", "server"); err != nil {
-		return res, err
+	if onHost {
+		if err := hs.Start(ctx, modeBasic, ""); err != nil {
+			return res, withLogs(ctx, err, srvLogs, "server")
+		}
+	} else {
+		basic := cmp
+		basic.Files = []string{basicOverride}
+		if err := basic.Run(ctx, "up", "-d", "server"); err != nil {
+			return res, err
+		}
 	}
 	adminBasic := &jmap.Client{BaseURL: serverURL, Username: admin.Username, Password: admin.Secret}
 	var keyID, key string
@@ -274,7 +353,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		keyID, key, err = adminBasic.CreateAPIKey(ctx, "inbuxa installer, for this setup only", time.Hour)
 		return err
 	}); err != nil {
-		return res, withLogs(ctx, fmt.Errorf("an API key for the setup: %w", err), cmp, "server")
+		return res, withLogs(ctx, fmt.Errorf("an API key for the setup: %w", err), srvLogs, "server")
 	}
 	srv := &jmap.Client{BaseURL: serverURL, Token: key}
 	defer func() {
@@ -285,21 +364,42 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		}
 	}()
 
+	if onHost {
+		log.Step("fitting the server's listeners to the host")
+		if err := srv.HostListeners(ctx, hostFinalBind, o.Local); err != nil {
+			return res, fmt.Errorf("moving the server's listeners: %w", err)
+		}
+		log.Info("plain HTTP on %s for the proxy and the webmail; 443 is left to the proxy", hostFinalBind)
+		if o.Local {
+			log.Info("the mail ports on loopback only")
+		}
+		if err := hs.WriteUnit(ctx, true); err != nil {
+			return res, err
+		}
+		if err := hs.Start(ctx, modeNormal, ""); err != nil {
+			return res, withLogs(ctx, err, srvLogs, "server")
+		}
+		serverURL = "http://" + hostFinalBind
+		srv.BaseURL = serverURL
+	}
+
 	log.Step("starting the rest of the stack")
 	// Without the override, so the server is recreated taking tokens only.
 	// --remove-orphans: the compose file is rendered from the shapes asked
 	// for, so a component the topology no longer lists is simply not in it
 	// any more. Without this its container would keep running, belonging to
 	// a project that no longer describes it.
-	if err := cmp.Run(ctx, "up", "-d", "--remove-orphans"); err != nil {
-		return res, err
+	if !stack.Empty() {
+		if err := cmp.Run(ctx, "up", "-d", "--remove-orphans"); err != nil {
+			return res, err
+		}
 	}
 
 	if err := waitFor(ctx, log, "the server to come back configured", 120*time.Second, func(ctx context.Context) error {
 		_, err := srv.DomainID(ctx, o.Domain)
 		return err
 	}); err != nil {
-		return res, withLogs(ctx, err, cmp, "server")
+		return res, withLogs(ctx, err, srvLogs, "server")
 	}
 	domainID, err := srv.DomainID(ctx, o.Domain)
 	if err != nil {
@@ -310,32 +410,41 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	// sign-in, every push stream opened and dropped as tabs come and go. The
 	// server bans per address, so a ban on that one is a ban on everybody's
 	// webmail. The webmail rate-limits sign-ins per real client itself.
+	// On the host both arrive from loopback, which is exempted once.
+	allowed := map[string]bool{}
 	if stack.Webmail {
 		log.Step("exempting the webmail from the auto-ban")
 		if err := srv.AllowIP(ctx, stack.WebmailIP, "the webmail: every request arrives from this address"); err != nil {
 			return res, fmt.Errorf("exempting the webmail: %w", err)
 		}
+		allowed[stack.WebmailIP] = true
 	}
 	if stack.Proxy {
 		log.Step("trusting the proxy's X-Forwarded-For")
 		if err := srv.TrustForwardedFor(ctx); err != nil {
 			return res, fmt.Errorf("trusting the proxy: %w", err)
 		}
-		if err := srv.AllowIP(ctx, stack.CaddyIP, "the proxy: certificate renewals and autoconfig arrive from this address"); err != nil {
-			return res, fmt.Errorf("exempting the proxy: %w", err)
+		if !allowed[stack.CaddyIP] {
+			if err := srv.AllowIP(ctx, stack.CaddyIP, "the proxy: certificate renewals and autoconfig arrive from this address"); err != nil {
+				return res, fmt.Errorf("exempting the proxy: %w", err)
+			}
 		}
 	}
 	if stack.Webmail || stack.Proxy {
 		// Neither setting takes effect on a running server.
 		log.Info("restarting the server so those take effect")
-		if err := cmp.Run(ctx, "restart", "server"); err != nil {
+		restart := func() error { return cmp.Run(ctx, "restart", "server") }
+		if onHost {
+			restart = func() error { return hs.Restart(ctx) }
+		}
+		if err := restart(); err != nil {
 			return res, err
 		}
 		if err := waitFor(ctx, log, "the server to restart", 120*time.Second, func(ctx context.Context) error {
 			_, err := srv.DomainID(ctx, o.Domain)
 			return err
 		}); err != nil {
-			return res, withLogs(ctx, err, cmp, "server")
+			return res, withLogs(ctx, err, srvLogs, "server")
 		}
 	}
 
@@ -443,7 +552,7 @@ func waitForCertificate(ctx context.Context, srv *jmap.Client, log Log, domainID
 // brought up, and anything no longer in the file goes with --remove-orphans.
 // Nothing touches the mail: data volumes are left alone, and a component
 // that is removed can be added back with what it had.
-func converge(ctx context.Context, o plan.Options, stack compose.Stack, cmp docker.Compose,
+func converge(ctx context.Context, o plan.Options, stack compose.Stack, cmp docker.Compose, hs *hostServer,
 	st *state.State, f host.Facts, log Log) (*Result, error) {
 
 	res := &Result{
@@ -456,6 +565,10 @@ func converge(ctx context.Context, o plan.Options, stack compose.Stack, cmp dock
 				res.AdminUser = fields[1]
 			}
 		}
+	}
+
+	if hs != nil {
+		return convergeHost(ctx, o, stack, cmp, hs, st, f, log, res)
 	}
 
 	// Before anything is recreated: an install from before #5 keeps the
@@ -504,8 +617,57 @@ func converge(ctx context.Context, o plan.Options, stack compose.Stack, cmp dock
 		}
 	}
 
+	saveState(st, o, f, log)
+	return res, nil
+}
+
+// convergeHost is converge for a server on the host: the binary, the unit
+// and its environment are rewritten if they changed, whatever runs in
+// containers beside it is brought in line, and the server is restarted only
+// if what it reads at start is different.
+func convergeHost(ctx context.Context, o plan.Options, stack compose.Stack, cmp docker.Compose, hs *hostServer,
+	st *state.State, f host.Facts, log Log, res *Result) (*Result, error) {
+
+	// Run already wrote the environment; reading it back as it was before is
+	// not possible, so whether it changed is decided by the shapes, as for a
+	// container.
+	if err := hs.WriteUnit(ctx, true); err != nil {
+		return res, err
+	}
+	log.Step("bringing the stack in line with the file")
+	if stack.Empty() {
+		if _, err := os.Stat(filepath.Join(o.Dir, "compose.yaml")); err == nil {
+			// Everything that ran beside the server was removed.
+			if err := cmp.Run(ctx, "down", "--remove-orphans"); err != nil {
+				return res, err
+			}
+			os.Remove(filepath.Join(o.Dir, "compose.yaml"))
+			os.Remove(filepath.Join(o.Dir, "Caddyfile"))
+		}
+	} else if err := cmp.Run(ctx, "up", "-d", "--remove-orphans"); err != nil {
+		return res, err
+	}
+	_, active := discover.HostServer(ctx)
+	frontEnds := st.Shapes["console"] != string(o.Shape(plan.Console)) || st.Shapes["webmail"] != string(o.Shape(plan.Webmail))
+	if frontEnds || !active {
+		log.Info("restarting the server")
+		if err := hs.Restart(ctx); err != nil {
+			return res, withLogs(ctx, err, hs, "server")
+		}
+		if err := waitFor(ctx, log, "the server to answer again", 120*time.Second, func(ctx context.Context) error {
+			return live(ctx, "http://"+hostFinalBind)
+		}); err != nil {
+			return res, withLogs(ctx, err, hs, "server")
+		}
+	}
+	saveState(st, o, f, log)
+	return res, nil
+}
+
+func saveState(st *state.State, o plan.Options, f host.Facts, log Log) {
 	st.Machine, st.Dir, st.Domain = o.Machine, o.Dir, o.Domain
 	st.Runtime, st.Topology = f.Runtime.Kind, o.TopologyPath
+	st.Installer = "server " + release.ServerVersion
 	st.Shapes = map[string]string{}
 	for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
 		if sh := o.Shape(c); sh != plan.Skip {
@@ -515,7 +677,6 @@ func converge(ctx context.Context, o plan.Options, stack compose.Stack, cmp dock
 	if err := st.Save(); err != nil {
 		log.Info("could not write %s: %v", state.Path, err)
 	}
-	return res, nil
 }
 
 // Verify is the last step: does what was installed actually answer?
@@ -604,7 +765,13 @@ func waitFor(ctx context.Context, log Log, what string, limit time.Duration, pro
 	return fmt.Errorf("waited %s for %s: %w", limit, what, last)
 }
 
-func withLogs(ctx context.Context, err error, c docker.Compose, service string) error {
+// logSource is wherever a server's last lines come from: its container, or
+// the journal.
+type logSource interface {
+	Logs(ctx context.Context, service string, lines int) string
+}
+
+func withLogs(ctx context.Context, err error, c logSource, service string) error {
 	logs := c.Logs(ctx, service, 25)
 	if strings.TrimSpace(logs) == "" {
 		return err
