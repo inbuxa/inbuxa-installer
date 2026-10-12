@@ -35,7 +35,15 @@ type State struct {
 	ServerURL string            `json:"serverUrl,omitempty"` // the server on another machine these front ends were joined to
 	Updated   time.Time         `json:"updated"`             //
 	Installer string            `json:"installer,omitempty"` // the version that wrote this
+
+	// RemovedAt is when `inbuxa uninstall` took the programs away and kept
+	// the data. The shapes stay, so `install` run again picks the data up
+	// rather than trying a first boot on a server configured long ago.
+	RemovedAt *time.Time `json:"removedAt,omitempty"`
 }
+
+// Removed is whether the programs were uninstalled with the data kept.
+func (s *State) Removed() bool { return s.RemovedAt != nil }
 
 const Version = 1
 
