@@ -629,7 +629,7 @@ func (w *Wizard) viewComponents(width int) ([]string, string) {
 	}
 	body = append(body, "",
 		"  "+Dim("container: an image, run with this machine's docker or podman"),
-		"  "+Dim("host:      the release binary under systemd (the server only, for now)"),
+		"  "+Dim("host:      from its release, under systemd or as files a web server serves"),
 		"  "+Dim("skip:      not on this machine"))
 	return body, "↑↓: component   ←→ or s/c/h: choose   Enter: next   Esc: back   q: quit"
 }

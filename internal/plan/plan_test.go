@@ -65,3 +65,16 @@ func TestHostFrontEndsComeFromTheirReleases(t *testing.T) {
 		t.Errorf("needs = %+v", p.Needs)
 	}
 }
+
+func TestTheSurveyOffersWhatTheInstallerCanAdd(t *testing.T) {
+	f := machine()
+	f.Node = host.Node{} // only the installer's own Node is missing
+	text := SurveyText(f)
+	if !strings.Contains(text, "host (with --install-deps: the webmail runs on the installer's own Node") {
+		t.Errorf("a webmail on the host is refused rather than offered:\n%s", text)
+	}
+	f.Systemd = false // and this, nothing installs
+	if text := SurveyText(f); !strings.Contains(text, "host (no: a host install needs systemd") {
+		t.Errorf("a machine without systemd is offered a host webmail:\n%s", text)
+	}
+}

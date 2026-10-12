@@ -85,8 +85,8 @@ join flags:
                              administrator; "-" reads it from standard input.
                              INBUXA_JOIN_KEY works too, and keeps it out of
                              the shell's history
-  --console SHAPE            container | skip   (default: container)
-  --webmail SHAPE            container | skip   (default: container)
+  --console SHAPE            container | host | skip   (default: container)
+  --webmail SHAPE            container | host | skip   (default: container)
   --domain NAME              default: the server's name without its first label
   --console-host, --webmail-host, --email, --proxy, --dir, --local,
   --install-deps, --dry-run, --yes   as for install
@@ -368,8 +368,7 @@ func join(args []string) int {
 		return 1
 	}
 	fmt.Println("\nChecking it works:")
-	problems := apply.JoinVerify(ctx, res,
-		p.Options.Shape(plan.Console) != plan.Skip, p.Options.Shape(plan.Webmail) != plan.Skip, log)
+	problems := apply.JoinVerify(ctx, res, p.Options.Shape(plan.Console), p.Options.Shape(plan.Webmail), log)
 	for _, why := range problems {
 		fmt.Fprintln(os.Stderr, "  problem: "+why)
 	}

@@ -75,8 +75,8 @@ type Log interface {
 	Out() io.Writer
 }
 
-// Run carries out p. The console and the webmail are containers for now, and
-// it says so rather than pretending a host install of either happened.
+// Run carries out p: each component in a container or on the host, as the
+// plan says.
 func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, error) {
 	o := p.Options
 	if o.Shape(plan.Server) == plan.Skip {
