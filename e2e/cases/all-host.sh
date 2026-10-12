@@ -53,6 +53,13 @@ via admin.$D -D - -o /dev/null "https://admin.$D$ASSET" | grep -qi "cache-contro
 via webmail.$D https://webmail.$D/api/health | grep -q '"ok":true' && ok "the webmail is healthy through nginx" || bad "the webmail through nginx"
 CODE=$(via mail.$D -o /dev/null -w '%{http_code}' https://mail.$D/.well-known/jmap)
 case "$CODE" in 30*|200|401) ok "the mail server through nginx ($CODE)" ;; *) bad "the server through nginx: $CODE" ;; esac
+# The server gives a code for the webmail's own address only if it knows the
+# webmail's client: registered from the secret in its environment.
+USER=$(awk '/^first mailbox/ {print $3}' "$DIR/credentials.txt")
+PASS=$(awk '/^first mailbox/{getline; print $2}' "$DIR/credentials.txt")
+ANSWER=$(via mail.$D -X POST https://mail.$D/api/auth -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  -d "{\"type\":\"authCode\",\"accountName\":\"$USER\",\"accountSecret\":\"$PASS\",\"clientId\":\"ihasmail-inbuxa\",\"redirectUri\":\"https://webmail.$D/api/auth/callback\",\"codeChallenge\":\"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM\",\"codeChallengeMethod\":\"S256\"}")
+grep -q '"client_\{0,1\}[cC]ode"' <<<"$ANSWER" && ok "the server signs people in for the webmail at https://webmail.$D" || { bad "no sign-in for the webmail"; head -c 200 <<<"$ANSWER" | sed 's/^/    /'; }
 
 echo
 echo "==> status"

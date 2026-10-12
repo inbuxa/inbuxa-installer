@@ -228,20 +228,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		if err := hs.Install(ctx); err != nil {
 			return nil, err
 		}
-		env := map[string]string{
-			"INBUXA_ADMIN_URL":   stack.ConsoleURL,
-			"INBUXA_WEBMAIL_URL": stack.WebmailURL,
-		}
-		if stack.Webmail {
-			env["INBUXA_WEBMAIL_CLIENT_SECRET"] = sec.WebmailOAuth
-		}
-		if o.Local {
-			env["INBUXA_PUBLIC_URL"] = stack.ServerPublicURL
-		}
-		if stack.CABundle {
-			env["SSL_CERT_FILE"] = filepath.Join(dir, "ca-bundle.crt")
-		}
-		if _, err := hs.WriteEnv(env); err != nil {
+		if _, err := hs.WriteEnv(serverEnv(o, stack, sec)); err != nil {
 			return nil, err
 		}
 		log.Info("%s, %s", hostUnitPath, hs.envPath())
@@ -757,6 +744,7 @@ func saveState(st *state.State, o plan.Options, f host.Facts, log Log) {
 	st.Machine, st.Dir, st.Domain = o.Machine, o.Dir, o.Domain
 	st.Runtime, st.Topology = f.Runtime.Kind, o.TopologyPath
 	st.Installer = "server " + release.ServerVersion
+	st.RemovedAt = nil // installed again, on what was kept
 	st.Shapes = map[string]string{}
 	for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
 		if sh := o.Shape(c); sh != plan.Skip {
@@ -768,25 +756,41 @@ func saveState(st *state.State, o plan.Options, f host.Facts, log Log) {
 	}
 }
 
+// verifyFor is how long Verify gives each check.
+var verifyFor = time.Minute
+
 // Verify is the last step: does what was installed actually answer?
 func Verify(ctx context.Context, res *Result, o plan.Options, server bool, log Log) []string {
 	var problems []string
+	// Each for up to a minute: a container started a moment ago -- the
+	// last thing a converge does -- can refuse a connection before it
+	// answers, and that is not a problem to report.
 	check := func(what, url string, want string) {
-		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		resp, err := (&http.Client{}).Do(req)
-		if err != nil {
-			problems = append(problems, fmt.Sprintf("%s did not answer at %s: %v", what, url, err))
-			return
+		var last string
+		deadline := time.Now().Add(verifyFor)
+		for {
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			resp, err := (&http.Client{}).Do(req)
+			if err == nil {
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+				resp.Body.Close()
+				if want == "" || strings.Contains(string(body), want) {
+					cancel()
+					log.Info("%s answers", what)
+					return
+				}
+				last = fmt.Sprintf("%s answered at %s but did not look like itself", what, url)
+			} else {
+				last = fmt.Sprintf("%s did not answer at %s: %v", what, url, err)
+			}
+			cancel()
+			if time.Now().After(deadline) {
+				problems = append(problems, last)
+				return
+			}
+			time.Sleep(2 * time.Second)
 		}
-		defer resp.Body.Close()
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		if want != "" && !strings.Contains(string(body), want) {
-			problems = append(problems, fmt.Sprintf("%s answered at %s but did not look like itself", what, url))
-			return
-		}
-		log.Info("%s answers", what)
 	}
 	if server {
 		check("the mail server", "http://127.0.0.1:8081/.well-known/jmap", "")
@@ -869,6 +873,27 @@ func waitFor(ctx context.Context, log Log, what string, limit time.Duration, pro
 		}
 	}
 	return fmt.Errorf("waited %s for %s: %w", limit, what, last)
+}
+
+// serverEnv is what a server on the host reads from its environment: the
+// front ends' addresses, and the webmail's client secret whenever there is
+// a webmail here in either shape -- without it the server registers no
+// client for the webmail, which then answers and signs nobody in.
+func serverEnv(o plan.Options, stack compose.Stack, sec compose.Secrets) map[string]string {
+	env := map[string]string{
+		"INBUXA_ADMIN_URL":   stack.ConsoleURL,
+		"INBUXA_WEBMAIL_URL": stack.WebmailURL,
+	}
+	if stack.WebmailURL != "" {
+		env["INBUXA_WEBMAIL_CLIENT_SECRET"] = sec.WebmailOAuth
+	}
+	if o.Local {
+		env["INBUXA_PUBLIC_URL"] = stack.ServerPublicURL
+	}
+	if stack.CABundle {
+		env["SSL_CERT_FILE"] = filepath.Join(o.Dir, "ca-bundle.crt")
+	}
+	return env
 }
 
 // logSource is wherever a server's last lines come from: its container, or
