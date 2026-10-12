@@ -44,17 +44,13 @@ func TestTheConsoleOnTheHostNeedsAWebServer(t *testing.T) {
 	}
 }
 
-func TestHostFrontEndsWaitForTheirReleases(t *testing.T) {
+func TestHostFrontEndsComeFromTheirReleases(t *testing.T) {
 	f := machine()
-	if a := Available(f, Console, Host); a.OK || !strings.Contains(a.Why, "no console release") {
-		t.Errorf("console host with no release: %+v", a)
+	if a := Available(f, Console, Host); !a.OK {
+		t.Errorf("console host with a pinned release: %+v", a)
 	}
-	if a := Available(f, Webmail, Host); a.OK || !strings.Contains(a.Why, "no webmail release") {
-		t.Errorf("webmail host with no release: %+v", a)
-	}
-	t.Setenv("INBUXA_WEBMAIL_TARBALL", "/tmp/webmail.tar.gz")
 	if a := Available(f, Webmail, Host); !a.OK {
-		t.Errorf("webmail host with a tarball and Node 26: %+v", a)
+		t.Errorf("webmail host with a pinned release and Node 26: %+v", a)
 	}
 	f.Node = host.Node{Present: true, Path: "/usr/bin/node", Major: 26}
 	if a := Available(f, Webmail, Host); a.OK || !strings.Contains(a.Why, "own Node") {

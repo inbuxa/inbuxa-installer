@@ -102,7 +102,7 @@ This is early. What is built:
   that machine by hand. It asks first, dry runs included, and refuses with
   the reason when the key is wrong, the server is too old, or it already
   lists other front ends (`--replace` to put these in their place). Needs a
-  server release newer than 2026.10.12.
+  server release 2026.10.12.1 or newer.
 
 - **`plan -f` / `apply -f` / `export`** -- a whole installation described in
   one file, however many machines. Each machine acts on its own part and
@@ -133,7 +133,7 @@ CA, with no internet and no public name involved.
 Each release has static binaries for linux/amd64 and linux/arm64, and a
 SHA256SUMS to check them against:
 
-    V=v2026.10.12.1   # the newest: https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/latest
+    V=v2026.10.12.3   # the newest: https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/latest
     curl -fLO https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/download/$V/inbuxa-linux-amd64
     curl -fLO https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/download/$V/SHA256SUMS
     sha256sum --check --ignore-missing SHA256SUMS

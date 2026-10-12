@@ -437,6 +437,12 @@ func (w *Wizard) componentsProblem() string {
 	if w.shapes[plan.Server] == plan.Skip {
 		return "Front ends for a server on another machine are installed with inbuxa join, not here: keep the server, or quit and use join."
 	}
+	// What each choice can do on its own is above; what the choices can't
+	// do together -- a console of files on loopback, with no web server to
+	// serve them -- only the whole plan says.
+	if _, err := plan.Build(w.Facts, withDeps(w.Options())); err != nil {
+		return err.Error()
+	}
 	return ""
 }
 
