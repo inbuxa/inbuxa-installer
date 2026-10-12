@@ -88,7 +88,7 @@ func Join(ctx context.Context, p plan.Plan, f host.Facts, key string, log Log) (
 	}
 	for _, c := range []plan.Component{plan.Console, plan.Webmail} {
 		if o.Shape(c) == plan.Host {
-			return nil, fmt.Errorf("host installs of the console and the webmail are not built yet: %s was asked for as a host install", c)
+			return nil, fmt.Errorf("join installs the console and the webmail in containers for now: %s was asked for as a host install", c)
 		}
 	}
 	if o.Shape(plan.Console) == plan.Skip && o.Shape(plan.Webmail) == plan.Skip {
@@ -276,7 +276,11 @@ func JoinVerify(ctx context.Context, res *Result, console, webmail bool, log Log
 			return nil
 		})
 	}
-	problems := Verify(ctx, res, false, console, webmail, log)
+	o := plan.Options{Dir: res.Dir, Choices: []plan.Choice{
+		{Component: plan.Console, Shape: map[bool]plan.Shape{true: plan.Container, false: plan.Skip}[console]},
+		{Component: plan.Webmail, Shape: map[bool]plan.Shape{true: plan.Container, false: plan.Skip}[webmail]},
+	}}
+	problems := Verify(ctx, res, o, false, log)
 	if console {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()

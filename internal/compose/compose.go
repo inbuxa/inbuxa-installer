@@ -51,6 +51,13 @@ type Stack struct {
 	// only the browser talks to the server from it.
 	HostServer bool
 
+	// ConsoleFiles is where the console's files are when it is installed on
+	// the host rather than run as a container: a web server serves the
+	// directory. WebmailUnit is the webmail as a systemd unit on this
+	// machine, listening on 127.0.0.1:8080.
+	ConsoleFiles string
+	WebmailUnit  bool
+
 	// RemoteServerURL is a mail server on another machine, which the front
 	// ends here were joined to (`inbuxa join`). Nothing here serves its
 	// names; the webmail reaches it at this address.
@@ -151,12 +158,18 @@ func Write(dir string, s *Stack) (Secrets, error) {
 	if err := s.Addresses(); err != nil {
 		return sec, err
 	}
-	if s.HostServer {
+	switch {
+	case s.HostServer:
 		// Everything that talks to the server is on the host's network and
 		// arrives from loopback, which is the address the server is told to
 		// exempt from the auto-ban.
 		s.WebmailIP, s.CaddyIP = "127.0.0.1", "127.0.0.1"
-	} else if s.WebmailOnHost() {
+	case s.WebmailUnit:
+		// A server in a container is reached from the host at its published
+		// loopback port, and sees those requests come from the project
+		// network's gateway.
+		s.WebmailIP, s.CaddyIP = s.GatewayIP, s.GatewayIP
+	case s.WebmailOnHost():
 		s.WebmailIP = "127.0.0.1"
 	}
 
@@ -246,6 +259,14 @@ func (s Stack) WebmailServerURL() string {
 	return "http://server:8080"
 }
 
+// CaddyOnHost is whether the managed Caddy shares the host's network: when
+// something it proxies listens on the host's loopback, outside the project.
+func (s Stack) CaddyOnHost() bool { return s.HostServer || s.WebmailUnit }
+
+// ServesWebmail is whether there is a webmail here for a proxy to serve, in
+// either shape.
+func (s Stack) ServesWebmail() bool { return s.Webmail || s.WebmailUnit }
+
 // ServesServer is whether Caddy here serves the mail server's names: not when
 // the server is on another machine, whose own proxy does.
 func (s Stack) ServesServer() bool { return s.Server || s.HostServer }
@@ -268,7 +289,7 @@ func isLoopback(url string) bool {
 }
 
 func (s Stack) pick(project, host string) string {
-	if s.HostServer {
+	if s.CaddyOnHost() {
 		return host
 	}
 	return project

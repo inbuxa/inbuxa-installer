@@ -19,7 +19,7 @@
 	acme_ca_root /etc/caddy/acme-ca-root.pem
 {{- end}}
 }
-{{- if .Webmail}}
+{{- if .ServesWebmail}}
 
 # The webmail. Push arrives as Server-Sent Events, so responses are flushed as
 # they are written rather than buffered.
@@ -37,6 +37,21 @@
 {{.ConsoleHost}} {
 	encode zstd gzip
 	reverse_proxy {{.ConsoleUpstream}}
+}
+{{- end}}
+{{- if .ConsoleFiles}}
+
+# The console, installed on this machine as files and served from them: a
+# single-page app, so any path that is not a file is the app's own route.
+# Hashed assets are cached for a year; index.html, which names them, never.
+{{.ConsoleHost}} {
+	encode zstd gzip
+	root * /srv/console
+	try_files {path} /index.html
+	header /assets/* Cache-Control "public, max-age=31536000, immutable"
+	@page not path /assets/*
+	header @page Cache-Control "no-cache"
+	file_server
 }
 {{- end}}
 

@@ -47,7 +47,8 @@ import (
 // commit: the pair is the point.
 const (
 	composeVersion = "v5.5.1"
-	nodeVersion    = "v22.23.2"
+	nodeVersion    = "v26.11.1" // the webmail's image runs Node 26
+	NodeMajor      = 26
 )
 
 var composeSHA = map[string]string{
@@ -56,8 +57,8 @@ var composeSHA = map[string]string{
 }
 
 var nodeSHA = map[string]string{
-	"amd64": "d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307",
-	"arm64": "fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8",
+	"amd64": "3883bfc73f9a680ca4eab04b196068aaaab1373ffa77d8fc1a4408222495b651",
+	"arm64": "0945e2cde6aa0f54d980f03874dfe5cf3a549ce714c7fb9019e591ce0accf282",
 }
 
 // Need is one missing thing, and what the installer would do about it.
@@ -82,7 +83,10 @@ func For(f host.Facts, wantContainers, wantHostWebmail bool) []Need {
 	if wantContainers {
 		needs = append(needs, runtimeNeeds(f)...)
 	}
-	if wantHostWebmail && (!f.Node.Present || f.Node.Major < 22) {
+	// The webmail on the host runs on the installer's own Node, in
+	// /opt/inbuxa/node, whatever else the machine has: the version it was
+	// released against, and nothing the system's package manager can move.
+	if wantHostWebmail && (f.Node.Path != host.OwnPath || f.Node.Major != NodeMajor) {
 		needs = append(needs, nodeNeed(f))
 	}
 	var out []Need
@@ -231,6 +235,11 @@ func nodeNeed(f host.Facts) Need {
 		{"fetching node " + nodeVersion, func(ctx context.Context, log io.Writer) error {
 			tmp := filepath.Join(os.TempDir(), "inbuxa-node.tar.xz")
 			if err := fetchVerified(ctx, log, url, sum, tmp, 0o644); err != nil {
+				return err
+			}
+			// A different version unpacked over the old one would leave
+			// the old one's files behind it.
+			if err := os.RemoveAll("/opt/inbuxa/node"); err != nil {
 				return err
 			}
 			if err := os.MkdirAll("/opt/inbuxa/node", 0o755); err != nil {

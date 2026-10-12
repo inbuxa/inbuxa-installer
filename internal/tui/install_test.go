@@ -147,7 +147,7 @@ func TestWhatCannotBeBuiltIsRefusedOnItsScreen(t *testing.T) {
 	press(w, KeyDown)                       // the console
 	w.Update(Key{Kind: KeyRune, Rune: 'h'}) // on the host: not built
 	press(w, KeyEnter)
-	if w.screen != screenComponents || !strings.Contains(w.message, "not built yet") {
+	if w.screen != screenComponents || !strings.Contains(w.message, "can't be a host install") {
 		t.Errorf("a console host install got through: screen %d, %q", w.screen, w.message)
 	}
 	w.Update(Key{Kind: KeyRune, Rune: 'c'})

@@ -147,7 +147,7 @@ services:
 {{- if .Server}}
     depends_on: [server]
 {{- end}}
-{{- if .HostServer}}
+{{- if .CaddyOnHost}}
     # On the host's network: it holds 80 and 443 itself, and reaches the
     # server, the webmail and the console on loopback.
     network_mode: host
@@ -161,16 +161,20 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+{{- if .ConsoleFiles}}
+      # The console, installed on the host as files, served from here.
+      - {{.ConsoleFiles}}:/srv/console:ro
+{{- end}}
 {{- if .ACMECARoot}}
       - ./acme-ca-root.pem:/etc/caddy/acme-ca-root.pem:ro
 {{- end}}
-{{- if not .HostServer}}
+{{- if not .CaddyOnHost}}
     networks:
       stack:
         ipv4_address: {{.CaddyIP}}
 {{- end}}
 {{- end}}
-{{- if or .Server .Console (and .Webmail (not .WebmailOnHost)) (and .Proxy (not .HostServer))}}
+{{- if or .Server .Console (and .Webmail (not .WebmailOnHost)) (and .Proxy (not .CaddyOnHost))}}
 
 networks:
   stack:

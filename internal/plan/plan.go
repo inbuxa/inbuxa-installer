@@ -10,7 +10,10 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -184,10 +187,22 @@ func Available(f host.Facts, c Component, s Shape) Availability {
 			}
 			return Availability{OK: true}
 		case Console:
-			return Availability{Why: "not built yet: the console runs in a container for now"}
+			// Static files a web server serves: nothing runs, nothing to check
+			// on the machine but that there are files to install.
+			if release.ConsoleSHA256 == "" && os.Getenv("INBUXA_CONSOLE_TARBALL") == "" {
+				return Availability{Why: "no console release with files to install yet; run the console as a container"}
+			}
+			return Availability{OK: true}
 		case Webmail:
-			// Phase 2: a unit with a pinned Node (deps already fetches one).
-			return Availability{Why: "not built yet: the webmail runs in a container for now"}
+			if _, ok := release.WebmailSHA256[runtime.GOARCH]; !ok && os.Getenv("INBUXA_WEBMAIL_TARBALL") == "" {
+				return Availability{Why: "no webmail release with files to install yet for " + runtime.GOARCH + "; run the webmail as a container"}
+			}
+			// Its own Node, which the installer fetches (deps): missing is an
+			// offer, not a refusal.
+			if f.Node.Path != host.OwnPath || f.Node.Major != deps.NodeMajor {
+				return Availability{Why: fmt.Sprintf("the webmail runs on the installer's own Node %d, in %s, which isn't there yet", deps.NodeMajor, filepath.Dir(filepath.Dir(host.OwnPath)))}
+			}
+			return Availability{OK: true}
 		}
 	}
 	return Availability{Why: "unknown shape"}
@@ -234,6 +249,12 @@ func Build(f host.Facts, o Options) (Plan, error) {
 	}
 	if chosen == 0 {
 		return p, fmt.Errorf("nothing chosen: pick at least one component")
+	}
+	// The console on the host is files, and files need a web server: the
+	// managed Caddy, or yours with the configuration written for it.
+	if o.Shape(Console) == Host && (o.Local || o.Proxy == "none") {
+		return p, errors.New("the console on the host is static files, served by a web server: choose --proxy caddy or --proxy snippets, or run the console as a container" +
+			map[bool]string{true: " (a loopback evaluation has no web server)", false: ""}[o.Local])
 	}
 	// The proxy the installer manages is Caddy in a container, whatever the
 	// server is: a server on the host still needs a runtime for it.
@@ -342,8 +363,8 @@ func Build(f host.Facts, o Options) (Plan, error) {
 			p.Steps = append(p.Steps, Step{
 				Title: "Install the console on this machine",
 				Detail: []string{
-					"files: " + o.Dir + "/console (static, served by the proxy)",
-					"no service: it is a page, not a program",
+					fmt.Sprintf("files: %s/console, from console release %s, checked against its pinned checksum", o.Dir, or(release.ConsoleVersion, "(a local tarball)")),
+					"served by " + map[string]string{"caddy": "the managed Caddy", "snippets": "your web server, from the configuration written for it"}[o.Proxy] + "; no service of its own: it is a page, not a program",
 				},
 			})
 		}
@@ -364,9 +385,10 @@ func Build(f host.Facts, o Options) (Plan, error) {
 			p.Steps = append(p.Steps, Step{
 				Title: "Install the webmail on this machine",
 				Detail: []string{
-					"files: " + o.Dir + "/webmail, from the release tarball",
+					fmt.Sprintf("files: %s/webmail, from webmail release %s, checked against its pinned checksum; owned by root, read-only to the webmail", o.Dir, or(release.WebmailVersion, "(a local tarball)")),
+					fmt.Sprintf("Node %d: the installer's own, in /opt/inbuxa/node", deps.NodeMajor),
 					"user: inbuxa-webmail (system, no login)",
-					"unit: /etc/systemd/system/inbuxa-webmail.service, listening on 127.0.0.1:8080",
+					"unit: /etc/systemd/system/inbuxa-webmail.service, listening on 127.0.0.1:8080; its environment in " + o.Dir + "/webmail.env",
 				},
 			})
 		}
@@ -551,4 +573,11 @@ func joinInts(n []int) string {
 		out = append(out, fmt.Sprint(i))
 	}
 	return strings.Join(out, ", ")
+}
+
+func or(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

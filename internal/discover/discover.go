@@ -28,15 +28,17 @@ import (
 
 // Found is what this machine turns out to be running.
 type Found struct {
-	Dir        string            // the deployment directory, when there is one
-	Domain     string            // read back from the deployment
-	MailHost   string            //
-	Services   map[string]string // component -> running|stopped|absent
-	Compose    []string          // services the compose file declares
-	Runtime    string            // what is running them
-	Proxy      bool              // the deployment includes a proxy
-	Credential bool              // credentials.txt is there
-	HostServer bool              // the server runs on the host, under systemd
+	Dir         string            // the deployment directory, when there is one
+	Domain      string            // read back from the deployment
+	MailHost    string            //
+	Services    map[string]string // component -> running|stopped|absent
+	Compose     []string          // services the compose file declares
+	Runtime     string            // what is running them
+	Proxy       bool              // the deployment includes a proxy
+	Credential  bool              // credentials.txt is there
+	HostServer  bool              // the server runs on the host, under systemd
+	HostConsole bool              // the console is files on the host
+	HostWebmail bool              // the webmail runs on the host, under systemd
 }
 
 // HostServerUnit is the unit a host install of the server runs as.
@@ -48,10 +50,17 @@ const (
 // HostServer is whether the server is installed here as a host install, and
 // whether systemd has it running.
 func HostServer(ctx context.Context) (installed, active bool) {
-	if _, err := os.Stat(HostServerUnitPath); err != nil {
+	return hostUnit(ctx, HostServerUnit)
+}
+
+// HostWebmailUnit is the unit a host install of the webmail runs as.
+const HostWebmailUnit = "inbuxa-webmail.service"
+
+func hostUnit(ctx context.Context, unit string) (installed, active bool) {
+	if _, err := os.Stat("/etc/systemd/system/" + unit); err != nil {
 		return false, false
 	}
-	return true, exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", HostServerUnit).Run() == nil
+	return true, exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", unit).Run() == nil
 }
 
 // Dirs are where a deployment may be. The first is what this installer
@@ -74,6 +83,10 @@ func Run(ctx context.Context, f host.Facts, dirs ...string) Found {
 		found.HostServer = true
 		found.Services["server"] = map[bool]string{true: "running", false: "stopped"}[active]
 	}
+	if installed, active := hostUnit(ctx, HostWebmailUnit); installed {
+		found.HostWebmail = true
+		found.Services["webmail"] = map[bool]string{true: "running", false: "stopped"}[active]
+	}
 	for _, dir := range dirs {
 		for _, marker := range []string{"compose.yaml", "server.env"} {
 			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil && found.Dir == "" {
@@ -87,6 +100,11 @@ func Run(ctx context.Context, f host.Facts, dirs ...string) Found {
 
 	if _, err := os.Stat(filepath.Join(found.Dir, "credentials.txt")); err == nil {
 		found.Credential = true
+	}
+	// The console on the host is files: in place is all it can be.
+	if _, err := os.Stat(filepath.Join(found.Dir, "console", "index.html")); err == nil {
+		found.HostConsole = true
+		found.Services["console"] = "running"
 	}
 
 	b, err := os.ReadFile(filepath.Join(found.Dir, "compose.yaml"))

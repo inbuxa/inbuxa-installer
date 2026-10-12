@@ -31,3 +31,29 @@ func ServerTarball(arch string) string {
 	return fmt.Sprintf("https://git.coffeylabs.org/inbuxa/inbuxa-server/releases/download/v%s/inbuxa-linux-%s.tar.gz",
 		ServerVersion, arch)
 }
+
+// The console and the webmail as files, for host installs. Their releases
+// attach these since inbuxa-admin #106 and inbuxa-webmail #68; a version
+// with an empty checksum has none to install, and the host shape is
+// unavailable until one does. INBUXA_CONSOLE_TARBALL and
+// INBUXA_WEBMAIL_TARBALL name a local file instead, for testing.
+const (
+	ConsoleVersion = ""
+	ConsoleSHA256  = ""
+	WebmailVersion = ""
+)
+
+// WebmailSHA256 is the SHA-256 of each architecture's webmail tarball.
+var WebmailSHA256 = map[string]string{}
+
+// ConsoleTarball is where the console's release tarball is.
+func ConsoleTarball() string {
+	return fmt.Sprintf("https://git.coffeylabs.org/inbuxa/inbuxa-admin/releases/download/v%s/inbuxa-admin.tar.gz", ConsoleVersion)
+}
+
+// WebmailTarball is where the webmail's release tarball for an
+// architecture is. Its tags are inbuxa-v<version>.
+func WebmailTarball(arch string) string {
+	return fmt.Sprintf("https://git.coffeylabs.org/inbuxa/inbuxa-webmail/releases/download/inbuxa-v%s/inbuxa-webmail-linux-%s.tar.gz",
+		WebmailVersion, arch)
+}

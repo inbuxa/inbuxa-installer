@@ -80,8 +80,16 @@ This is early. What is built:
   data in `<dir>/server`, and a unit, `inbuxa-server.service`. During setup
   it is reachable from the machine itself and nowhere else; afterwards its
   plain HTTP is on loopback for the proxy and the webmail, 443 is left to
-  the proxy, and the unit will not start without a configuration file. The
-  console and the webmail run in containers beside it, or not at all.
+  the proxy, and the unit will not start without a configuration file.
+- **`--console host`** -- the console's files from its release, checked
+  against a pinned checksum, unpacked into `<dir>/console` and pointed at the
+  server; the managed Caddy or your own web server (`--proxy snippets`)
+  serves them. Nothing runs, so there is nothing to start.
+- **`--webmail host`** -- the webmail from its release, checked the same way,
+  in `<dir>/webmail`, owned by root and only read by the webmail, which runs
+  as its own user under `inbuxa-webmail.service` on the installer's own
+  Node 26 (in `/opt/inbuxa/node`), on 127.0.0.1:8080. With all three on the
+  host and `--proxy snippets`, no container runtime is installed at all.
 
 - **`join URL --key KEY`** -- the console and the webmail on this machine,
   for a mail server already running at URL on another one. It reaches that
@@ -107,9 +115,9 @@ This is early. What is built:
   installing. It exits non-zero when they disagree, so a machine can be
   asked in a script whether it still matches itself.
 
-Not built yet: host installs of the console and the webmail, `join` in the
-interface (it is a command for now), `upgrade`, `uninstall`, and moving the
-server between a container and the host. The design is in the inbuxa specification (§6.1 and
+Not built yet: `join` in the interface (it is a command for now) and of
+front ends on the host, `upgrade`, `uninstall`, and moving the server
+between a container and the host. The design is in the inbuxa specification (§6.1 and
 the installer draft); the phases are there too.
 
     inbuxa install --local --domain example.test --install-deps --yes
@@ -152,6 +160,8 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/run.sh e2e/cases/join.sh           front ends joined to a server elsewhere
     e2e/vm/run.sh e2e/cases/interface.sh      the interface, driven key by key in a terminal
     e2e/vm/run.sh e2e/cases/proxy-snippets.sh  behind nginx, from the configuration it writes
+    e2e/vm/run.sh e2e/cases/webmail-host.sh    the webmail on the host, and signing in to it
+    e2e/vm/run.sh e2e/cases/all-host.sh        everything on the host, behind nginx, no containers
     e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
     e2e/vm/run.sh e2e/cases/status-export.sh  intent against reality, and the file
     OLD_REF=<commit> e2e/vm/run.sh e2e/cases/upgrade-volumes.sh
@@ -161,7 +171,9 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
 `SERVER_BINARY=path/to/inbuxa e2e/vm/run.sh …` installs a server build
 instead of the release wherever a case installs the server on the host (the
 installer's `INBUXA_SERVER_BINARY`), for testing a server change before it
-is released.
+is released. `CONSOLE_TARBALL=` and `WEBMAIL_TARBALL=` do the same for the
+console's and the webmail's release tarballs (`INBUXA_CONSOLE_TARBALL`,
+`INBUXA_WEBMAIL_TARBALL`).
 
 Each case starts from a copy of the machine taken when it was new, so a run
 is free to break it and a failure is the installer's rather than the last
