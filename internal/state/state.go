@@ -30,6 +30,8 @@ type State struct {
 	Dir       string            `json:"dir"`                 // the deployment directory
 	Runtime   string            `json:"runtime,omitempty"`   // docker or podman
 	Domain    string            `json:"domain,omitempty"`    //
+	MailHost  string            `json:"mailHost,omitempty"`  // the server's name; installs before 2026.10.13 did not record it
+	Local     bool              `json:"local,omitempty"`     // --local: loopback only, no certificates
 	Shapes    map[string]string `json:"shapes"`              // component -> container|host
 	Topology  string            `json:"topology,omitempty"`  // the file this came from, if any
 	ServerURL string            `json:"serverUrl,omitempty"` // the server on another machine these front ends were joined to
