@@ -41,9 +41,9 @@ import (
 // here would mean this program needing a release of its own for every one of
 // theirs.
 const (
-	DefaultServerImage  = "registry.coffeylabs.org/inbuxa/inbuxa-server:2026.9.30.2"
-	DefaultConsoleImage = "registry.coffeylabs.org/inbuxa/inbuxa-admin:2026.9.30"
-	DefaultWebmailImage = "registry.coffeylabs.org/inbuxa/inbuxa-webmail:2026.10.5-g17a8093"
+	DefaultServerImage  = "registry.coffeylabs.org/inbuxa/inbuxa-server:2026.10.10.1"
+	DefaultConsoleImage = "registry.coffeylabs.org/inbuxa/inbuxa-admin:2026.10.5"
+	DefaultWebmailImage = "registry.coffeylabs.org/inbuxa/inbuxa-webmail:2026.10.9-g62936ab"
 	DefaultCaddyImage   = "docker.io/library/caddy:2-alpine"
 	DefaultSubnet       = "172.31.253.0/24"
 )
