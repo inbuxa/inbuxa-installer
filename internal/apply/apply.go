@@ -45,7 +45,7 @@ import (
 // theirs.
 const (
 	DefaultServerImage  = release.ServerImage
-	DefaultConsoleImage = "registry.coffeylabs.org/inbuxa/inbuxa-admin:2026.10.5"
+	DefaultConsoleImage = "registry.coffeylabs.org/inbuxa/inbuxa-admin:2026.10.12"
 	DefaultWebmailImage = "registry.coffeylabs.org/inbuxa/inbuxa-webmail:2026.10.9-g62936ab"
 	DefaultCaddyImage   = "docker.io/library/caddy:2-alpine"
 	DefaultSubnet       = "172.31.253.0/24"
