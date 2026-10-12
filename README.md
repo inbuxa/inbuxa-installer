@@ -46,6 +46,14 @@ This is early. What is built:
   it is not a second installer -- and it is built on the standard library
   alone, like the rest. Without a terminal it says which flags to use.
 
+- **`--proxy snippets`** -- for a machine that already runs nginx or Caddy:
+  nothing here takes 80 or 443, and the installer writes
+  `<dir>/proxy/nginx-inbuxa.conf` and `<dir>/proxy/Caddyfile.fragment` for
+  that web server to load, trusts it in front of the suite (its
+  X-Forwarded-For, and an exemption from the auto-ban), and leaves loading
+  and reloading to you. Once it is loaded, the mail server's own
+  certificates are turned on in the console. `--proxy none` writes nothing.
+
 - **`survey`** -- the machine's facts: distribution, init, whether Docker is
   usable *by this user*, Node's version, which of the suite's ports are free
   and what holds the ones that are not, memory, disk, and whether an install
@@ -100,9 +108,8 @@ This is early. What is built:
   asked in a script whether it still matches itself.
 
 Not built yet: host installs of the console and the webmail, `join` in the
-interface (it is a command for now), `upgrade`, `uninstall`, moving the
-server between a container and the host, and `--proxy snippets`, which the
-plan describes but nothing writes yet. The design is in the inbuxa specification (§6.1 and
+interface (it is a command for now), `upgrade`, `uninstall`, and moving the
+server between a container and the host. The design is in the inbuxa specification (§6.1 and
 the installer draft); the phases are there too.
 
     inbuxa install --local --domain example.test --install-deps --yes
@@ -144,6 +151,7 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/run.sh e2e/cases/install-host.sh    the server on the host, the rest beside it
     e2e/vm/run.sh e2e/cases/join.sh           front ends joined to a server elsewhere
     e2e/vm/run.sh e2e/cases/interface.sh      the interface, driven key by key in a terminal
+    e2e/vm/run.sh e2e/cases/proxy-snippets.sh  behind nginx, from the configuration it writes
     e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
     e2e/vm/run.sh e2e/cases/status-export.sh  intent against reality, and the file
     OLD_REF=<commit> e2e/vm/run.sh e2e/cases/upgrade-volumes.sh

@@ -60,6 +60,7 @@ type Result struct {
 	FirstPass   string
 	ZoneFile    string
 	Certificate string // what issued the mail server's certificate, when one arrived
+	ProxyConfig string // where the configuration for the operator's own web server is, with --proxy snippets
 	ConsoleURL  string
 	WebmailURL  string
 	ServerURL   string
@@ -250,7 +251,15 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	// moment it was configured -- which is exactly what adding or removing a
 	// front end used to do, and why it could not.
 	if existing, err := state.Load(); err == nil && existing.Installed() {
-		return converge(ctx, o, stack, cmp, hs, existing, f, log)
+		res, err := converge(ctx, o, stack, cmp, hs, existing, f, log)
+		if err == nil && !o.Local && o.Proxy == "snippets" {
+			// What the web server is told follows what is installed here.
+			if dir, err := compose.WriteProxySnippets(o.Dir, stack); err == nil {
+				res.ProxyConfig = dir
+				log.Info("rewrote %s for what is installed now: reload your web server if it changed", dir)
+			}
+		}
+		return res, err
 	}
 
 	// The bootstrap credential lives in an override file for this step only,
@@ -430,7 +439,32 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 			}
 		}
 	}
-	if stack.Webmail || stack.Proxy {
+	// The operator's own web server, in front of the same loopback ports:
+	// trusted the same way, and exempted at the address its requests
+	// arrive from. That is loopback for a server on the host; for one in a
+	// container it is the project network's gateway, because a request to
+	// a published loopback port reaches the container from there.
+	snippets := !o.Local && o.Proxy == "snippets"
+	if snippets {
+		log.Step("trusting your web server's X-Forwarded-For")
+		if err := srv.TrustForwardedFor(ctx); err != nil {
+			return res, fmt.Errorf("trusting the proxy: %w", err)
+		}
+		from := []string{"127.0.0.1"}
+		if !onHost {
+			from = append(from, stack.GatewayIP)
+		}
+		for _, addr := range from {
+			if allowed[addr] {
+				continue
+			}
+			if err := srv.AllowIP(ctx, addr, "your web server in front of the suite: its requests arrive from this address"); err != nil {
+				return res, fmt.Errorf("exempting your web server: %w", err)
+			}
+			allowed[addr] = true
+		}
+	}
+	if stack.Webmail || stack.Proxy || snippets {
 		// Neither setting takes effect on a running server.
 		log.Info("restarting the server so those take effect")
 		restart := func() error { return cmp.Run(ctx, "restart", "server") }
@@ -452,7 +486,16 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	// which is the proxy. Asked for on a machine with no proxy, the order
 	// can only fail -- so this says whose job it is instead of leaving a
 	// failed ACME account behind and stopping the install over it.
-	if !o.Local && !stack.Proxy {
+	if snippets {
+		log.Step("writing the configuration for your web server")
+		dir, err := compose.WriteProxySnippets(o.Dir, stack)
+		if err != nil {
+			return res, fmt.Errorf("writing the proxy configuration: %w", err)
+		}
+		res.ProxyConfig = dir
+		log.Info("%s/nginx-inbuxa.conf and %s/Caddyfile.fragment: load one into your web server", dir, dir)
+		log.Info("once it is loaded, turn on the mail server's own certificates in the console (Settings › Overview, Certificates): its challenges reach it through port 80")
+	} else if !o.Local && !stack.Proxy {
 		log.Info("no proxy here, so certificates are yours to arrange: the server's own names are %s",
 			strings.Join(stack.ServerNames(), ", "))
 	}

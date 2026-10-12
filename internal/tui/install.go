@@ -59,7 +59,7 @@ type Wizard struct {
 	row    int
 	shapes map[plan.Component]plan.Shape
 
-	proxy int // 0 caddy, 1 your own
+	proxy int // 0 caddy, 1 snippets for your own, 2 none
 
 	built      plan.Plan
 	buildErr   error
@@ -145,7 +145,7 @@ func (w *Wizard) Options() plan.Options {
 	o.ACMEEmail = strings.TrimSpace(w.fields[4].text())
 	o.Dir = strings.TrimSpace(w.fields[5].text())
 	o.Local = w.fields[6].text() == "yes"
-	o.Proxy = []string{"caddy", "none"}[w.proxy]
+	o.Proxy = []string{"caddy", "snippets", "none"}[w.proxy]
 	o.Choices = nil
 	for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
 		o.Choices = append(o.Choices, plan.Choice{Component: c, Shape: w.shapes[c]})
@@ -449,9 +449,13 @@ func (w *Wizard) updateReach(k Key) {
 	}
 	switch k.Kind {
 	case KeyUp:
-		w.proxy = 0
+		if w.proxy > 0 {
+			w.proxy--
+		}
 	case KeyDown:
-		w.proxy = 1
+		if w.proxy < 2 {
+			w.proxy++
+		}
 	case KeyEnter:
 		w.next()
 	}
@@ -633,7 +637,8 @@ func (w *Wizard) viewReach(width int) ([]string, string) {
 	}
 	options := []struct{ name, about string }{
 		{"Caddy, managed by the installer", "It holds 80 and 443, gets certificates for every name, and passes the server's own certificate challenges through."},
-		{"Your own web server", "Nothing here takes 80 or 443. Point yours at 127.0.0.1:8081 for the server, 127.0.0.1:8082 for the console and 127.0.0.1:8080 for the webmail; certificates are yours to arrange."},
+		{"Your own web server, with its configuration written", "Nothing here takes 80 or 443. The installer writes an nginx configuration and a Caddyfile fragment for the web server you run, and trusts it in front of the suite; loading it is yours."},
+		{"Nothing in front", "Nothing here takes 80 or 443, and nothing is written. The server answers on 127.0.0.1:8081, the console on 127.0.0.1:8082, the webmail on 127.0.0.1:8080."},
 	}
 	for i, opt := range options {
 		mark := "( )"
@@ -867,6 +872,9 @@ func Summary(res *apply.Result, err error, problems []string) []string {
 		row("certificate", "issued by "+res.Certificate)
 	}
 	row("dns records", res.ZoneFile)
+	if res.ProxyConfig != "" {
+		row("proxy config", res.ProxyConfig+" (load it into your web server)")
+	}
 	return out
 }
 

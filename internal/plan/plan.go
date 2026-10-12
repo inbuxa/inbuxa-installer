@@ -390,6 +390,8 @@ func Build(f host.Facts, o Options) (Plan, error) {
 				Detail: []string{
 					o.Dir + "/proxy/nginx-inbuxa.conf and " + o.Dir + "/proxy/Caddyfile.fragment",
 					"nothing is loaded or restarted: that stays yours",
+					"the server trusts your web server's X-Forwarded-For and exempts it from the auto-ban",
+					"the mail server's own certificates: turned on in the console once it is loaded",
 				},
 			})
 		}

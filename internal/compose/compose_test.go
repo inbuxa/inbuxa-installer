@@ -119,3 +119,55 @@ func TestJoinedToALoopbackServerTheWebmailSharesTheHost(t *testing.T) {
 		t.Errorf("the webmail would be exempted at %s", s.WebmailIP)
 	}
 }
+
+func TestProxySnippetsPointAtLoopback(t *testing.T) {
+	dir := t.TempDir()
+	s := stack(false)
+	if err := s.Addresses(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := WriteProxySnippets(dir, *s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nginx, _ := os.ReadFile(filepath.Join(out, "nginx-inbuxa.conf"))
+	caddy, _ := os.ReadFile(filepath.Join(out, "Caddyfile.fragment"))
+	for _, want := range []string{
+		"server_name mail.example.com autoconfig.example.com",
+		"proxy_pass http://127.0.0.1:8081;", "proxy_pass http://127.0.0.1:8082;", "proxy_pass http://127.0.0.1:8080;",
+		"location /.well-known/acme-challenge/",
+		"proxy_set_header X-Forwarded-For $remote_addr;",
+		"server_name admin.example.com;", "server_name webmail.example.com;",
+	} {
+		if !strings.Contains(string(nginx), want) {
+			t.Errorf("nginx-inbuxa.conf lacks %q", want)
+		}
+	}
+	for _, want := range []string{"reverse_proxy 127.0.0.1:8081", "disable_http_challenge", "import " + dir + "/proxy/Caddyfile.fragment"} {
+		if !strings.Contains(string(caddy), want) {
+			t.Errorf("Caddyfile.fragment lacks %q", want)
+		}
+	}
+	// A fragment is imported beside other sites: no global options block
+	for _, line := range strings.Split(string(caddy), "\n") {
+		if strings.TrimSpace(line) == "{" {
+			t.Error("the Caddyfile fragment has a global options block")
+		}
+	}
+	if s.GatewayIP != "172.31.253.1" {
+		t.Errorf("gateway = %s", s.GatewayIP)
+	}
+}
+
+func TestProxySnippetsLeaveOutWhatIsNotHere(t *testing.T) {
+	s := stack(true)
+	s.Webmail = false
+	out, err := WriteProxySnippets(t.TempDir(), *s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nginx, _ := os.ReadFile(filepath.Join(out, "nginx-inbuxa.conf"))
+	if strings.Contains(string(nginx), "webmail.example.com") {
+		t.Error("a webmail that isn't installed is in the nginx configuration")
+	}
+}
