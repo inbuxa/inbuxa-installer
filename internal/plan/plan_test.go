@@ -73,6 +73,13 @@ func TestTheSurveyOffersWhatTheInstallerCanAdd(t *testing.T) {
 	if !strings.Contains(text, "host (with --install-deps: the webmail runs on the installer's own Node") {
 		t.Errorf("a webmail on the host is refused rather than offered:\n%s", text)
 	}
+	if !strings.Contains(text, "node                   not installed (a host webmail runs on inbuxa's own Node 26; --install-deps adds it)") {
+		t.Errorf("the node line doesn't make the same offer:\n%s", text)
+	}
+	f.Node = host.Node{Present: true, Version: "22.14.0", Major: 22, Path: "/usr/bin/node"}
+	if text := SurveyText(f); !strings.Contains(text, "22.14.0 at /usr/bin/node (not used:") || strings.Contains(text, "too old") {
+		t.Errorf("a system Node is judged rather than reported:\n%s", text)
+	}
 	f.Systemd = false // and this, nothing installs
 	if text := SurveyText(f); !strings.Contains(text, "host (no: a host install needs systemd") {
 		t.Errorf("a machine without systemd is offered a host webmail:\n%s", text)
