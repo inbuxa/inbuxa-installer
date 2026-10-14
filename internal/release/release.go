@@ -38,15 +38,15 @@ func ServerTarball(arch string) string {
 // unavailable until one does. INBUXA_CONSOLE_TARBALL and
 // INBUXA_WEBMAIL_TARBALL name a local file instead, for testing.
 const (
-	ConsoleVersion = "2026.10.12.2"
-	ConsoleSHA256  = "73583f5220bc5199a799e1f71d00e5f26e4a1171fc10ec6171c1b0348e878b85"
-	WebmailVersion = "2026.10.12-g6e1a1cb" // its tag is inbuxa-v<this>
+	ConsoleVersion = "2026.10.14"
+	ConsoleSHA256  = "5f8a1448cc254adbacaa601f3b01763ac401bc24e1f307f3969404392c046647"
+	WebmailVersion = "2026.10.13-g1299756" // its tag is inbuxa-v<this>
 )
 
 // WebmailSHA256 is the SHA-256 of each architecture's webmail tarball.
 var WebmailSHA256 = map[string]string{
-	"amd64": "399d2575a2d9426b0b28d9b64f35ca44602b4bd2817e23a7a29c7dc22a978a3f",
-	"arm64": "33a2cc435168739efb34e202124ff5526b7445f8de8ba8f62dc23dd3d0a94e7f",
+	"amd64": "cf579536ef19802ccd3b43b3a5fe0f5176e42f86400ca798b74b3355da9fb1d7",
+	"arm64": "df141d0b0e3cdf646899971c6c2997a01fae8cf8e0c83e26e5caebc89169e8d3",
 }
 
 // ConsoleTarball is where the console's release tarball is.
