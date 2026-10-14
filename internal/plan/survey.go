@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/deps"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
 )
 
@@ -50,12 +51,17 @@ func SurveyText(f host.Facts) string {
 	}
 	fmt.Fprintf(&b, "  %-22s %s\n", "glibc", glibc)
 
-	node := "not installed"
+	// The Node that matters is the installer's own, the one a host webmail
+	// runs on. A system Node is reported, but never judged: it isn't used,
+	// and calling it too old read as a refusal two lines above the offer.
+	node := fmt.Sprintf("not installed (a host webmail runs on inbuxa's own Node %d; --install-deps adds it)", deps.NodeMajor)
 	switch {
-	case f.Node.Present && f.Node.Major >= 22:
-		node = f.Node.Version + " at " + f.Node.Path
+	case f.Node.Present && f.Node.Path == host.OwnPath && f.Node.Major == deps.NodeMajor:
+		node = "inbuxa's own Node " + f.Node.Version + " at " + f.Node.Path
+	case f.Node.Present && f.Node.Path == host.OwnPath:
+		node = fmt.Sprintf("inbuxa's own Node %s at %s (a host webmail needs Node %d)", f.Node.Version, f.Node.Path, deps.NodeMajor)
 	case f.Node.Present:
-		node = f.Node.Version + " (too old for a host install of the webmail)"
+		node = fmt.Sprintf("%s at %s (not used: a host webmail runs on inbuxa's own Node %d; --install-deps adds it)", f.Node.Version, f.Node.Path, deps.NodeMajor)
 	}
 	fmt.Fprintf(&b, "  %-22s %s\n", "node", node)
 	if f.Existing != "" {
