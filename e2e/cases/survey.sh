@@ -3,14 +3,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # The first case: on a machine with nothing installed on it, does the
-# installer describe that machine correctly, and does it refuse the shapes
-# that machine cannot do -- with a reason someone could act on?
+# installer describe that machine correctly, and does it say which shapes it
+# can take as it is, which it can take once --install-deps adds what is
+# missing, and why -- with a reason someone could act on?
 #
-# A fresh Debian cloud image has no docker and no node, which is exactly the
-# interesting case: every container shape and the webmail's host shape are
-# unavailable, and the server's host shape is not. Getting this wrong in
-# either direction is the difference between an installer that reads a
-# machine and one that guesses.
+# A fresh Debian cloud image has no container runtime and no node, which is
+# exactly the interesting case: every container shape and the webmail's host
+# shape are offers with --install-deps, and the server's host shape works as
+# the machine is. Getting this wrong in either direction is the difference
+# between an installer that reads a machine and one that guesses.
 #
 # Run from the host with: e2e/vm/run.sh e2e/cases/survey.sh
 set -uo pipefail
@@ -28,20 +29,22 @@ echo "$S" | sed 's/^/    /'
 has "$S" "Debian GNU/Linux 13" "names the distribution"
 has "$S" "init                   systemd" "sees systemd"
 has "$S" "running as             root" "knows it is root"
-has "$S" "docker                 not installed" "sees no docker"
-has "$S" "node                   not installed" "sees no node"
+has "$S" "container runtime      none: neither docker nor podman is installed" "sees no container runtime"
+has "$S" "node                   not installed (a host webmail runs on inbuxa's own Node 26; --install-deps adds it)" "sees no node, and offers its own"
+hasnt "$S" "too old" "never judges a system Node"
 has "$S" "25     SMTP" "lists the mail ports"
 hasnt "$S" "cannot tell without root" "as root, every port is a real answer"
-has "$S" "container (no: docker is not installed)" "containers unavailable, with the reason"
-has "$S" "server     container (no" "the server cannot be a container here"
-has "$S" "webmail    container (no: docker is not installed)   host (no: a host install of the webmail needs Node 22" "the webmail can be neither shape here"
+has "$S" "container (with --install-deps: no container runtime" "containers offered with --install-deps, with the reason"
+has "$S" "server     container (with --install-deps" "the server can be a container once docker is in"
+has "$S" "host (with --install-deps: the webmail runs on the installer's own Node 26" "the webmail on the host is offered, not refused"
 
 echo
 echo "==> a plan that this machine cannot carry out"
 OUT="$(/tmp/inbuxa install --domain example.test 2>&1)"; rc=$?
 [ $rc -ne 0 ] && ok "refuses (exit $rc)" || bad "should have refused"
 has "$OUT" "cannot install as asked" "says so plainly"
-has "$OUT" "docker is not installed" "and why"
+has "$OUT" "no container runtime: neither docker nor podman is installed" "and why"
+has "$OUT" "Pass --install-deps to let it" "and what would fix it"
 
 echo
 echo "==> a plan it can: the server on the host, front ends elsewhere"
