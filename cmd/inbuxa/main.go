@@ -418,6 +418,18 @@ func (installer) Run(ctx context.Context, p plan.Plan, f host.Facts, log apply.L
 	return apply.Run(ctx, p, f, log)
 }
 
+func (installer) JoinCheck(ctx context.Context, o plan.Options, key string) error {
+	return apply.JoinCheck(ctx, o, key)
+}
+
+func (installer) Join(ctx context.Context, p plan.Plan, f host.Facts, key string, log apply.Log) (*apply.Result, error) {
+	return apply.Join(ctx, p, f, key, log)
+}
+
+func (installer) JoinVerify(ctx context.Context, res *apply.Result, console, webmail plan.Shape, log apply.Log) []string {
+	return apply.JoinVerify(ctx, res, console, webmail, log)
+}
+
 func (installer) Verify(ctx context.Context, res *apply.Result, o plan.Options, log apply.Log) []string {
 	return apply.Verify(ctx, res, o, true, log)
 }

@@ -33,6 +33,13 @@ type fakeInstaller struct {
 	got  *plan.Plan
 	fail error
 	hold chan struct{} // when set, Run waits on it
+
+	// joins (join_test.go)
+	checkErr  error
+	checkHold chan struct{} // when set, JoinCheck waits on it
+	checkedOn []string      // the keys JoinCheck was given
+	joined    *plan.Plan
+	joinKey   string
 }
 
 func (f *fakeInstaller) Run(ctx context.Context, p plan.Plan, _ host.Facts, log apply.Log) (*apply.Result, error) {
@@ -154,12 +161,20 @@ func TestWhatCannotBeBuiltIsRefusedOnItsScreen(t *testing.T) {
 	if w.screen != screenComponents || !strings.Contains(w.message, "web server") {
 		t.Errorf("a console host install on loopback got through: screen %d, %q", w.screen, w.message)
 	}
-	w.Update(Key{Kind: KeyRune, Rune: 'c'})
-	press(w, KeyUp)
-	w.Update(Key{Kind: KeyRune, Rune: 's'}) // no server
+	w.Update(Key{Kind: KeyRune, Rune: 's'}) // no console
+	press(w, KeyDown)
+	w.Update(Key{Kind: KeyRune, Rune: 's'}) // no webmail
+	press(w, KeyUp, KeyUp)
+	w.Update(Key{Kind: KeyRune, Rune: 's'}) // and no server: nothing at all
 	press(w, KeyEnter)
-	if w.screen != screenComponents || !strings.Contains(w.message, "join") {
-		t.Errorf("front ends without a server got through: %q", w.message)
+	if w.screen != screenComponents || !strings.Contains(w.message, "at least one") {
+		t.Errorf("nothing at all got through: %q", w.message)
+	}
+	press(w, KeyDown)
+	w.Update(Key{Kind: KeyRune, Rune: 'c'}) // a console, for a server elsewhere: a join
+	press(w, KeyEnter)
+	if w.screen != screenJoin {
+		t.Errorf("front ends without a server did not lead to the Server screen: %d, %q", w.screen, w.message)
 	}
 }
 
