@@ -5,6 +5,8 @@ package tui
 
 // The installer's interface: six screens, always in this order, with the
 // plan in front of the operator before anything happens (installer spec §4).
+// With the mail server skipped, it joins a server on another machine instead,
+// and a seventh screen, Join, asks for that server and an API key (join.go).
 //
 // It is a way of filling in the flags with the machine's own facts on
 // screen, not a second implementation. Every screen writes into the same
@@ -29,18 +31,23 @@ const (
 	screenFound = iota
 	screenNames
 	screenComponents
+	screenJoin
 	screenReach
 	screenPlan
 	screenApply
 )
 
-var screenTitles = []string{"What it found", "Names", "Components", "Reach", "The plan", "Install"}
+var screenTitles = []string{"What it found", "Names", "Components", "Server", "Reach", "The plan", "Install"}
 
 // Installer carries out an install. In the program it is apply.Run and
 // apply.Verify; tests give it something that changes nothing.
 type Installer interface {
 	Run(ctx context.Context, p plan.Plan, f host.Facts, log apply.Log) (*apply.Result, error)
 	Verify(ctx context.Context, res *apply.Result, o plan.Options, log apply.Log) []string
+	// The same for a join: apply.JoinCheck, apply.Join and apply.JoinVerify.
+	JoinCheck(ctx context.Context, o plan.Options, key string) error
+	Join(ctx context.Context, p plan.Plan, f host.Facts, key string, log apply.Log) (*apply.Result, error)
+	JoinVerify(ctx context.Context, res *apply.Result, console, webmail plan.Shape, log apply.Log) []string
 }
 
 // Wizard is the interface's state.
@@ -61,6 +68,8 @@ type Wizard struct {
 
 	proxy int // 0 caddy, 1 snippets for your own, 2 none
 
+	join joinState // the Join screen, when the server is skipped (join.go)
+
 	built      plan.Plan
 	buildErr   error
 	confirming bool
@@ -76,6 +85,7 @@ type field struct {
 	value       []rune
 	cursor      int
 	toggle      bool // a yes/no field, in value "yes" or ""
+	secret      bool // typed but never shown: the API key
 	placeholder func(o plan.Options) string
 }
 
@@ -105,6 +115,7 @@ func NewWizard(f host.Facts, inst Installer) *Wizard {
 	for _, f := range w.fields {
 		f.cursor = len(f.value)
 	}
+	w.join.fields = joinFields()
 	w.shapes = map[plan.Component]plan.Shape{plan.Server: plan.Container, plan.Console: plan.Container, plan.Webmail: plan.Container}
 	for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
 		w.shapes[c] = w.defaultShape(c)
@@ -150,6 +161,9 @@ func (w *Wizard) Options() plan.Options {
 	for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
 		o.Choices = append(o.Choices, plan.Choice{Component: c, Shape: w.shapes[c]})
 	}
+	if w.joining() {
+		w.joinOptions(&o)
+	}
 	// What the machine lacks for the shapes chosen is installed rather
 	// than refused: the components screen says what that will be.
 	o.InstallDeps = len(w.needs(o)) > 0
@@ -175,8 +189,12 @@ func withDeps(o plan.Options) plan.Options {
 
 // Update handles one key.
 func (w *Wizard) Update(k Key) bool {
+	w.settle()
 	if w.screen == screenApply {
 		return w.updateApply(k)
+	}
+	if w.join.checking() {
+		return w.updateChecking(k)
 	}
 	if k.Kind == KeyCtrlC {
 		return true
@@ -194,11 +212,14 @@ func (w *Wizard) Update(k Key) bool {
 	}
 	w.message = ""
 	// q quits everywhere but in a text field, where it is a letter
-	if k.Kind == KeyRune && k.Rune == 'q' && !(w.screen == screenNames && !w.fields[w.focus].toggle) {
+	if k.Kind == KeyRune && k.Rune == 'q' && !w.typing() {
 		return true
 	}
 	if k.Kind == KeyEsc && w.screen > screenFound {
 		w.screen--
+		if w.screen == screenJoin && !w.joining() {
+			w.screen--
+		}
 		w.scroll = 0
 		return false
 	}
@@ -212,6 +233,8 @@ func (w *Wizard) Update(k Key) bool {
 		w.updateNames(k)
 	case screenComponents:
 		w.updateComponents(k)
+	case screenJoin:
+		w.updateJoin(k)
 	case screenReach:
 		w.updateReach(k)
 	case screenPlan:
@@ -222,6 +245,8 @@ func (w *Wizard) Update(k Key) bool {
 				w.message = "The plan can't be carried out as it stands: Esc to go back and change it."
 			case !w.Facts.Root:
 				w.message = "Installing needs root: run it again as root (sudo inbuxa). Nothing has happened."
+			case w.joining() && !w.joinChecked():
+				w.message = "The server hasn't been asked about this exact join: Esc back to the Server screen and ask it again."
 			default:
 				w.confirming = true
 			}
@@ -232,6 +257,9 @@ func (w *Wizard) Update(k Key) bool {
 
 func (w *Wizard) next() {
 	w.screen++
+	if w.screen == screenJoin && !w.joining() {
+		w.screen++
+	}
 	w.scroll = 0
 	if w.screen == screenPlan {
 		w.built, w.buildErr = plan.Build(w.Facts, w.Options())
@@ -282,6 +310,19 @@ func (w *Wizard) updateNames(k Key) {
 			if k.Rune == ' ' || k.Rune == 'y' || k.Rune == 'n' {
 				w.toggle(f, k.Rune)
 			}
+			return
+		}
+		f.edit(k)
+	default:
+		f.edit(k)
+	}
+}
+
+// edit is a key in a text field: typing, deleting and moving the cursor.
+func (f *field) edit(k Key) {
+	switch k.Kind {
+	case KeyRune:
+		if f.toggle {
 			return
 		}
 		f.value = append(f.value[:f.cursor], append([]rune{k.Rune}, f.value[f.cursor:]...)...)
@@ -434,8 +475,10 @@ func (w *Wizard) componentsProblem() string {
 	if !any {
 		return "Choose at least one component."
 	}
-	if w.shapes[plan.Server] == plan.Skip {
-		return "Front ends for a server on another machine are installed with inbuxa join, not here: keep the server, or quit and use join."
+	if w.joining() {
+		if s := recordedServer(); s != "" {
+			return fmt.Sprintf("This machine runs the mail server itself (a %s install), so its console and webmail are added with it, not joined to it: keep the mail server here.", s)
+		}
 	}
 	// What each choice can do on its own is above; what the choices can't
 	// do together -- a console of files on loopback, with no web server to
@@ -472,16 +515,23 @@ func (w *Wizard) View(width, height int) []string {
 	if width < 60 || height < 16 {
 		return []string{"", "  The window is too small for the installer.", "  Make it at least 60 by 16, or press q to quit."}
 	}
+	w.settle()
 	var out []string
-	steps := make([]string, len(screenTitles))
+	var steps []string
 	for i, t := range screenTitles {
+		if i == screenJoin && !w.joining() {
+			continue
+		}
+		if i == screenApply && w.joining() {
+			t = "Join"
+		}
 		switch {
 		case i == w.screen:
-			steps[i] = Bold(Accent(t))
+			steps = append(steps, Bold(Accent(t)))
 		case i < w.screen:
-			steps[i] = t
+			steps = append(steps, t)
 		default:
-			steps[i] = Dim(t)
+			steps = append(steps, Dim(t))
 		}
 	}
 	out = append(out, " "+Bold("inbuxa installer")+Dim("  ·  ")+strings.Join(steps, Dim(" › ")), "")
@@ -496,6 +546,8 @@ func (w *Wizard) View(width, height int) []string {
 		body, help = w.viewNames(width)
 	case screenComponents:
 		body, help = w.viewComponents(width)
+	case screenJoin:
+		body, help = w.viewJoin(width)
 	case screenReach:
 		body, help = w.viewReach(width)
 	case screenPlan:
@@ -522,6 +574,8 @@ func (w *Wizard) View(width, height int) []string {
 		out = append(out, "")
 	}
 	switch {
+	case w.confirming && w.joining():
+		out = append(out, " "+Bold(Warn("Join now? This changes this machine and the server's front ends. y to go ahead, any other key not to.")))
 	case w.confirming:
 		out = append(out, " "+Bold(Warn("Install now? This changes this machine. y to go ahead, any other key not to.")))
 	case w.message != "":
@@ -630,7 +684,7 @@ func (w *Wizard) viewComponents(width int) ([]string, string) {
 	body = append(body, "",
 		"  "+Dim("container: an image, run with this machine's docker or podman"),
 		"  "+Dim("host:      from its release, under systemd or as files a web server serves"),
-		"  "+Dim("skip:      not on this machine"))
+		"  "+Dim("skip:      not on this machine; skip the mail server to join one that runs elsewhere"))
 	return body, "↑↓: component   ←→ or s/c/h: choose   Enter: next   Esc: back   q: quit"
 }
 
@@ -682,12 +736,19 @@ func (w *Wizard) viewPlan(width int) ([]string, string) {
 	for _, l := range Wrap(Command(w.built.Options), width-6) {
 		body = append(body, "    "+Accent(l))
 	}
-	return body, "Enter: install   ↑↓ PgUp PgDn: scroll   Esc: back   q: quit"
+	verb := "install"
+	if w.joining() {
+		verb = "join"
+	}
+	return body, "Enter: " + verb + "   ↑↓ PgUp PgDn: scroll   Esc: back   q: quit"
 }
 
 // Command is the flags that do what the screens chose, leaving out what
 // would be the default anyway.
 func Command(o plan.Options) string {
+	if o.ServerURL != "" {
+		return joinCommand(o)
+	}
 	args := []string{"inbuxa", "install"}
 	add := func(flag, v, def string) {
 		if v != "" && v != def {
@@ -727,6 +788,7 @@ type progress struct {
 	err      error
 	result   *apply.Result
 	problems []string
+	extra    []string // after the summary: what a join leaves to say
 	poke     func()
 }
 
@@ -763,6 +825,10 @@ func (l lineWriter) Write(b []byte) (int, error) {
 }
 
 func (w *Wizard) startInstall() {
+	if w.joining() {
+		w.startJoin()
+		return
+	}
 	w.screen = screenApply
 	w.message = ""
 	ctx, cancel := context.WithCancel(context.Background())
@@ -827,6 +893,7 @@ func (w *Wizard) viewApply(width, room int) ([]string, string) {
 	if pr.done {
 		body = append(body, "")
 		body = append(body, Summary(pr.result, pr.err, pr.problems)...)
+		body = append(body, pr.extra...)
 		return body, "Enter or q: leave (the summary stays in your terminal)"
 	}
 	// Under the steps, the last of what is being said
@@ -871,7 +938,9 @@ func Summary(res *apply.Result, err error, problems []string) []string {
 	}
 	row("administrator", res.AdminUser)
 	row("first mailbox", res.FirstUser)
-	row("passwords", filepath.Join(res.Dir, "credentials.txt"))
+	if res.AdminUser != "" { // a join makes no accounts, so writes no passwords
+		row("passwords", filepath.Join(res.Dir, "credentials.txt"))
+	}
 	row("console", res.ConsoleURL)
 	row("webmail", res.WebmailURL)
 	if res.Certificate != "" {
@@ -894,7 +963,10 @@ func (w *Wizard) Outcome() (summary []string, ran, ok bool) {
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
 	if !pr.done {
+		if w.joining() {
+			return []string{"  The join was left before it finished; run inbuxa again to pick it up."}, true, false
+		}
 		return []string{"  The install was left before it finished; run inbuxa again to pick it up."}, true, false
 	}
-	return Summary(pr.result, pr.err, pr.problems), true, pr.err == nil && len(pr.problems) == 0
+	return append(Summary(pr.result, pr.err, pr.problems), pr.extra...), true, pr.err == nil && len(pr.problems) == 0
 }
