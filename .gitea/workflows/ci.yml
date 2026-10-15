@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 Coffey Labs LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Checks on every pull request and on main: formatting, vet for both release
+# architectures, the unit tests, a vulnerability check, and the rule that the
+# installer uses the standard library alone (specs/installer.md §8.1).
+#
+# A backstop, not the gate: changes are still built and tested locally before
+# they are committed, and the end-to-end cases in e2e/ (qemu VMs, which need
+# KVM and minutes each) are run by hand before a release. They are not here.
+#
+# The job image is pinned by digest, and the only action is coffey-labs/actions
+# checkout pinned by SHA.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    runs-on: light
+    container:
+      image: golang:1.26-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c # 1.26-bookworm
+    steps:
+      - uses: coffey-labs/actions/checkout@fab0c4d45e0162963965f1555df27b7bed5e20ec
+      - name: Standard library only
+        run: |
+          if grep -qE '^\s*(require|replace)\b' go.mod; then
+            echo "!! go.mod names a module; the installer uses the standard library alone" >&2
+            exit 1
+          fi
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          [ -z "$out" ] || { echo "!! not gofmt-clean:" >&2; echo "$out" >&2; exit 1; }
+      - run: go vet ./...
+      # The interface's terminal layer makes system calls that differ by
+      # architecture, and arm64 is a release binary too.
+      - run: GOARCH=arm64 go vet ./...
+      - run: go test -count=1 ./...
+      # @latest on purpose: a vulnerability check should use today's database.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
