@@ -83,9 +83,9 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		return nil, fmt.Errorf("this build installs the front ends only alongside a server it installs too; use join once that is built")
 	}
 	onHost := o.Shape(plan.Server) == plan.Host
-	if st, err := state.Load(); err == nil && st.Installed() && st.Shapes["server"] != "" && st.Shapes["server"] != string(o.Shape(plan.Server)) {
-		return nil, fmt.Errorf("the server is installed here as a %s install; moving it to a %s install is not built yet",
-			st.Shapes["server"], o.Shape(plan.Server))
+	var moveFrom plan.Shape
+	if st, err := state.Load(); err == nil {
+		moveFrom, _ = MovingServer(st, o)
 	}
 	needContainers := !onHost || o.Shape(plan.Console) == plan.Container ||
 		o.Shape(plan.Webmail) == plan.Container || (!o.Local && o.Proxy == "caddy")
@@ -106,6 +106,19 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		if needContainers {
 			log.Info("using %s %s", f.Runtime.Kind, f.Runtime.Version)
 		}
+	}
+
+	// A move stops the old shape and archives it before anything of the
+	// new one is written; it is carried out once that is in place.
+	var mv *serverMove
+	if moveFrom != "" {
+		var err error
+		if mv, err = beginMove(ctx, o, moveFrom, f, log); err != nil {
+			return nil, err
+		}
+		// Whatever stops this run before the move is carried out puts the
+		// old shape back; finish does its own putting back.
+		defer mv.abort(ctx)
 	}
 
 	dir := o.Dir
@@ -275,6 +288,13 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	// moment it was configured -- which is exactly what adding or removing a
 	// front end used to do, and why it could not.
 	if existing, err := state.Load(); err == nil && existing.Installed() {
+		if mv != nil {
+			if err := mv.finish(ctx, stack, !o.Local && o.Proxy == "snippets"); err != nil {
+				return nil, err
+			}
+			// What it reads at start has been read: nothing more to restart for.
+			serverChanged = false
+		}
 		res, err := converge(ctx, o, stack, cmp, hs, serverChanged, existing, f, log)
 		if err == nil && hw != nil {
 			// Its files may be new, or what it reads at start; or it may

@@ -379,6 +379,68 @@ func (c *Client) Listeners(ctx context.Context) ([]Listener, error) {
 	return got.List, json.Unmarshal(rs[1].Args, &got)
 }
 
+// ContainerListeners undoes HostListeners, for a server moving from the host
+// into a container: every listener back on [::], plain HTTP on 8080, which
+// is what the compose file publishes. The HTTPS listener HostListeners took
+// away is not put back: the proxy terminates TLS in front of a container as
+// well, and the container's 443 is not published. Like any listener change
+// it takes effect when the server next starts.
+func (c *Client) ContainerListeners(ctx context.Context) error {
+	ls, err := c.Listeners(ctx)
+	if err != nil {
+		return err
+	}
+	update := map[string]any{}
+	for _, l := range ls {
+		binds := map[string]bool{}
+		for addr := range l.Bind {
+			if i := strings.LastIndex(addr, ":"); i >= 0 {
+				binds["[::]"+addr[i:]] = true
+			}
+		}
+		if l.Protocol == "http" && !l.TLSImplicit {
+			binds = map[string]bool{"[::]:8080": true}
+		}
+		update[l.ID] = map[string]any{"bind": binds}
+	}
+	if len(update) == 0 {
+		return nil
+	}
+	rs, err := c.Do(ctx, Call{"x:NetworkListener/set", map[string]any{"update": update}, "0"})
+	if err != nil {
+		return err
+	}
+	_, err = DecodeSet(rs[0])
+	return err
+}
+
+// AllowedIPs is the set of addresses already exempted from the auto-ban.
+func (c *Client) AllowedIPs(ctx context.Context) (map[string]bool, error) {
+	rs, err := c.Do(ctx,
+		Call{"x:AllowedIp/query", map[string]any{}, "0"},
+		Call{"x:AllowedIp/get", map[string]any{
+			"#ids":       map[string]any{"resultOf": "0", "name": "x:AllowedIp/query", "path": "/ids"},
+			"properties": []string{"address"},
+		}, "1"},
+	)
+	if err != nil {
+		return nil, err
+	}
+	var got struct {
+		List []struct {
+			Address string `json:"address"`
+		} `json:"list"`
+	}
+	if err := json.Unmarshal(rs[1].Args, &got); err != nil {
+		return nil, err
+	}
+	have := map[string]bool{}
+	for _, a := range got.List {
+		have[a.Address] = true
+	}
+	return have, nil
+}
+
 // HostListeners fits the listeners a server creates on its first configured
 // start to a server running on the host rather than in a container.
 //
