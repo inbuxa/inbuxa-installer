@@ -179,7 +179,7 @@ CA, with no internet and no public name involved.
 Each release has static binaries for linux/amd64 and linux/arm64, and a
 SHA256SUMS to check them against:
 
-    V=v2026.10.14     # the newest: https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/latest
+    V=v2026.10.15.1   # the newest: https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/latest
     curl -fLO https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/download/$V/inbuxa-linux-amd64
     curl -fLO https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/download/$V/SHA256SUMS
     sha256sum --check --ignore-missing SHA256SUMS
