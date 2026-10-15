@@ -77,6 +77,11 @@ install flags:
                              are made to trust
   --install-deps             install what the chosen shapes need and this
                              machine lacks, rather than refusing over it
+  --key KEY                  an API key made in the console, needed only to
+                             move the server between a container and the host
+                             (run install again with the other --server);
+                             "-" reads it from standard input, and
+                             INBUXA_API_KEY works too
   --dry-run                  print the plan and stop
   --yes                      do not ask for confirmation
 
@@ -177,6 +182,7 @@ func install(args []string) int {
 		webmail = fs.String("webmail", "container", "")
 		dryRun  = fs.Bool("dry-run", false, "")
 		yes     = fs.Bool("yes", false, "")
+		key     = fs.String("key", os.Getenv("INBUXA_API_KEY"), "")
 	)
 	fs.StringVar(&o.Domain, "domain", "", "")
 	fs.StringVar(&o.MailHost, "mail-host", "", "")
@@ -212,12 +218,27 @@ func install(args []string) int {
 		return 1
 	}
 	fmt.Print(p.String())
+	moving := false
+	if st, err := state.Load(); err == nil {
+		if from, ok := apply.MovingServer(st, p.Options); ok {
+			moving = true
+			fmt.Print("\n" + apply.MoveNote(from, p.Options.Shape(plan.Server)))
+		}
+	}
 	if *dryRun {
 		return 0
 	}
 	if !*yes {
 		fmt.Fprintln(os.Stderr, "\nNothing has happened yet. Pass --yes to carry this out.")
 		return 1
+	}
+	if moving {
+		k, err := readKey(*key)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			return 2
+		}
+		p.Options.Key = k
 	}
 
 	fmt.Println("\nApplying:")
@@ -522,6 +543,7 @@ func topologyCmd(args []string, doIt bool) int {
 		machineName = fs.String("machine", "", "")
 		yes         = fs.Bool("yes", false, "")
 		installDeps = fs.Bool("install-deps", false, "")
+		key         = fs.String("key", os.Getenv("INBUXA_API_KEY"), "")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -597,6 +619,15 @@ func topologyCmd(args []string, doIt bool) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "\ncannot apply this file here: "+err.Error())
 		return 1
+	}
+	if from, ok := apply.MovingServer(st, p.Options); ok {
+		fmt.Print("\n" + apply.MoveNote(from, p.Options.Shape(plan.Server)))
+		k, err := readKey(*key)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			return 2
+		}
+		p.Options.Key = k
 	}
 	fmt.Println("\nApplying:")
 	log := &printer{}
@@ -1077,3 +1108,16 @@ func shape(s string) (plan.Shape, error) {
 // render is the first screen, as text: what this machine is, and what that
 // allows. The interface's first screen is the same text.
 func render(f host.Facts) string { return plan.SurveyText(f) }
+
+// readKey is an API key given as --key: "-" reads it from standard input,
+// so it stays out of the shell's history.
+func readKey(key string) (string, error) {
+	if key != "-" {
+		return key, nil
+	}
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		return "", fmt.Errorf("reading the key from standard input: %w", err)
+	}
+	return strings.TrimSpace(line), nil
+}

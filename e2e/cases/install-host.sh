@@ -124,8 +124,10 @@ OUT="$(/tmp/inbuxa install --local --domain example.test --server host --yes 2>&
 grep -q "is already" <<<"$OUT" && ok "and keeps the binary it has" || bad "the second run fetched the binary again"
 COUNT=$(compose ps --format '{{.Service}}' | sort -u | wc -l)
 [ "$COUNT" = 2 ] && ok "still two containers beside the server" || bad "$COUNT containers after a second run"
-OUT="$(/tmp/inbuxa install --local --domain example.test --server container --yes 2>&1)"; rc=$?
-[ $rc -ne 0 ] && grep -q "not built yet" <<<"$OUT" && ok "moving the server into a container is refused, with the reason" || bad "a shape change was not refused: exit $rc"
+# The move itself is move-server.sh's; without a key it changes nothing.
+OUT="$(INBUXA_API_KEY= /tmp/inbuxa install --local --domain example.test --server container --yes 2>&1)"; rc=$?
+[ $rc -ne 0 ] && grep -q "API key is needed" <<<"$OUT" && ok "moving the server into a container without a key is refused, with the reason" || bad "a move without a key was not refused: exit $rc"
+systemctl is-active --quiet inbuxa-server && ok "and the server is still on the host" || bad "the server stopped"
 
 echo
 echo "==> a server without its configuration stays down"

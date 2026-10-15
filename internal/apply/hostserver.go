@@ -61,6 +61,7 @@ const (
 	modeBootstrap setupMode = iota // the bootstrap credential, loopback only
 	modeBasic                      // configured, passwords on /jmap, loopback only
 	modeNormal                     // as it will run from now on
+	modeFenced                     // as it is, loopback only: a server moved here, until its listeners are fitted
 )
 
 // hostServer is the server as a host install, rooted in the deployment
@@ -243,8 +244,11 @@ func (h hostServer) Start(ctx context.Context, mode setupMode, bootPass string) 
 		os.Remove(setupEnvPath)
 	default:
 		env := "INBUXA_HTTP_BASIC_AUTH=all\n"
-		if mode == modeBootstrap {
+		switch mode {
+		case modeBootstrap:
 			env = "INBUXA_RECOVERY_ADMIN=admin:" + bootPass + "\n"
+		case modeFenced:
+			env = ""
 		}
 		if err := os.WriteFile(setupEnvPath, []byte(env), 0o600); err != nil {
 			return err
@@ -252,7 +256,7 @@ func (h hostServer) Start(ctx context.Context, mode setupMode, bootPass string) 
 		if err := os.MkdirAll(filepath.Dir(setupDropIn), 0o755); err != nil {
 			return err
 		}
-		dropIn := "# The inbuxa installer, during first boot only. Gone at the next reboot.\n" +
+		dropIn := "# The inbuxa installer, during first boot or a move only. Gone at the next reboot.\n" +
 			"[Service]\n" +
 			"EnvironmentFile=" + setupEnvPath + "\n" +
 			"IPAddressAllow=localhost\n" +

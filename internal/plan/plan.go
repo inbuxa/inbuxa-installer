@@ -82,6 +82,9 @@ type Options struct {
 	// ExemptAddress is the address the server sees the webmail's requests
 	// come from, when it is not what the webmail's name resolves to.
 	ExemptAddress string
+	// Key is an API key for what changes a running server's own settings:
+	// moving it between a container and the host. Never written down.
+	Key string
 
 	// Where this came from, when it came from a topology file: the machine's
 	// name in it, and the path, both recorded in the state file so a later

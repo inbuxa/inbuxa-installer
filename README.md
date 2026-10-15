@@ -152,8 +152,19 @@ This is early. What is built:
   installing. It exits non-zero when they disagree, so a machine can be
   asked in a script whether it still matches itself.
 
-Not built yet: moving the server between a container and the host. The design is in the inbuxa specification (§6.1 and
-the installer draft); the phases are there too.
+- **Moving the server** -- `install` run again with the other `--server`
+  moves the mail server between a container and the host, with its
+  configuration and mail. It needs an API key made in the console (`--key -`
+  or `INBUXA_API_KEY`; never written down), because the server's listeners
+  and its auto-ban exemptions change with the shape. Everything here stops
+  for a minute or two. The data is archived into `<dir>/backups` first and
+  then copied, never moved: the old copy -- the volumes, or `<dir>/server` --
+  stays where it was until you delete it, and a failure on the way puts the
+  server back as it was. The interface doesn't offer it yet: it has no key
+  to give.
+
+The design is in the inbuxa specification (§6.1 and the installer draft);
+the phases are there too.
 
     inbuxa install --local --domain example.test --install-deps --yes
 
@@ -209,6 +220,7 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/run.sh e2e/cases/uninstall-containers.sh  uninstalled, installed again on the data, purged
     e2e/vm/run.sh e2e/cases/uninstall-host.sh  the same with the server and the webmail on the host
     e2e/vm/run.sh e2e/cases/certs.sh          a failed order, reported, then fixed with a key
+    e2e/vm/run.sh e2e/cases/move-server.sh    the server into the host and back, keeping its mail
     e2e/vm/run.sh e2e/cases/topology.sh       growing and shrinking from a file
     e2e/vm/run.sh e2e/cases/status-export.sh  intent against reality, and the file
     OLD_REF=<commit> e2e/vm/run.sh e2e/cases/upgrade-volumes.sh
