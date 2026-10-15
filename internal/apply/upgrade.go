@@ -27,6 +27,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -197,17 +198,36 @@ func upgradeServerContainer(ctx context.Context, dir string, s Step, cmp docker.
 
 // archiveVolumes tars the server's two named volumes, read-only, with the
 // server's own (old) image, which has tar: nothing else is pulled.
+//
+// The archive comes out on the container's standard output and is written
+// here. Mounting <dir>/backups into the container instead is refused under
+// SELinux (Fedora, Rocky) unless the directory is relabelled for containers,
+// which a directory of backups has no business being.
 func archiveVolumes(ctx context.Context, dir, from string) (string, error) {
 	backups := filepath.Join(dir, "backups")
 	if err := os.MkdirAll(backups, 0o700); err != nil {
 		return "", err
 	}
-	name := fmt.Sprintf("server-%s-%s.tar.gz", from, time.Now().UTC().Format("20060102T150405Z"))
+	name := filepath.Join(backups, fmt.Sprintf("server-%s-%s.tar.gz", from, time.Now().UTC().Format("20060102T150405Z")))
 	image := strings.TrimSuffix(DefaultServerImage, ":"+tagOf(DefaultServerImage)) + ":" + from
-	_, err := docker.Output(ctx, "run", "--rm", "--user", "0", "--entrypoint", "tar",
+	f, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
+	}
+	var stderr strings.Builder
+	cmd := exec.CommandContext(ctx, docker.CLI, "run", "--rm", "--user", "0", "--entrypoint", "tar",
 		"-v", "inbuxa_inbuxa-etc:/archive/etc:ro", "-v", "inbuxa_inbuxa-data:/archive/data:ro",
-		"-v", backups+":/backups", image, "-czf", "/backups/"+name, "-C", "/archive", ".")
-	return filepath.Join(backups, name), err
+		image, "-czf", "-", "-C", "/archive", ".")
+	cmd.Stdout, cmd.Stderr = f, &stderr
+	err = cmd.Run()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(name)
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return name, nil
 }
 
 func upgradeFrontEndContainer(ctx context.Context, dir string, s Step, cmp docker.Compose, log Log) error {
