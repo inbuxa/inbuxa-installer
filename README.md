@@ -104,6 +104,8 @@ This is early. What is built:
   lists other front ends (`--replace` to put these in their place). Each
   front end goes in a container or on the host (`--console host`, `--webmail
   host`), as with `install`. Needs a server release 2026.10.12.1 or newer.
+  The interface does the same: skip the server on the Components screen and
+  give its address and the key.
 
 - **`plan -f` / `apply -f` / `export`** -- a whole installation described in
   one file, however many machines. Each machine acts on its own part and
@@ -150,8 +152,7 @@ This is early. What is built:
   installing. It exits non-zero when they disagree, so a machine can be
   asked in a script whether it still matches itself.
 
-Not built yet: `join` in the interface (it is a command for now), and
-moving the server between a container and the host. The design is in the inbuxa specification (§6.1 and
+Not built yet: moving the server between a container and the host. The design is in the inbuxa specification (§6.1 and
 the installer draft); the phases are there too.
 
     inbuxa install --local --domain example.test --install-deps --yes
@@ -167,7 +168,7 @@ CA, with no internet and no public name involved.
 Each release has static binaries for linux/amd64 and linux/arm64, and a
 SHA256SUMS to check them against:
 
-    V=v2026.10.12.3   # the newest: https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/latest
+    V=v2026.10.14     # the newest: https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/latest
     curl -fLO https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/download/$V/inbuxa-linux-amd64
     curl -fLO https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/download/$V/SHA256SUMS
     sha256sum --check --ignore-missing SHA256SUMS
