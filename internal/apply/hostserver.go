@@ -96,7 +96,7 @@ func (h hostServer) Install(ctx context.Context) (replaced bool, err error) {
 			return false, err
 		}
 		replaced = true
-	} else if v := binaryVersion(ctx, HostServerBinary); strings.Contains(v, release.ServerVersion) {
+	} else if v := binaryVersion(ctx, HostServerBinary); isVersion(v, release.ServerVersion) {
 		h.log.Info("%s is already %s", HostServerBinary, release.ServerVersion)
 	} else {
 		if err := h.fetchBinary(ctx); err != nil {
@@ -155,7 +155,7 @@ func (h hostServer) fetchBinary(ctx context.Context) error {
 	// Run before it is put in place: a binary this machine's C library
 	// cannot load is caught here, not by a unit that restarts forever.
 	got := binaryVersion(ctx, filepath.Join(work, "inbuxa"))
-	if !strings.Contains(got, release.ServerVersion) {
+	if !isVersion(got, release.ServerVersion) {
 		return fmt.Errorf("the release binary does not run here (it said %q); run the server as a container on this machine", got)
 	}
 	if err := runQuiet(ctx, "install", "-m", "0755", filepath.Join(work, "inbuxa"), HostServerBinary); err != nil {
@@ -305,6 +305,14 @@ func systemCABundle() ([]byte, error) {
 func binaryVersion(ctx context.Context, path string) string {
 	out, _ := exec.CommandContext(ctx, path, "--version").CombinedOutput()
 	return strings.TrimSpace(string(out))
+}
+
+// isVersion says whether what a binary said --version is names exactly the
+// release want. The server prints its version as the first word; a match
+// anywhere in the output would take 27.1-rc.1, 27.1.3 or 27.10.2 for 27.1.
+func isVersion(out, want string) bool {
+	f := strings.Fields(out)
+	return len(f) > 0 && f[0] == want
 }
 
 func nologin() string {

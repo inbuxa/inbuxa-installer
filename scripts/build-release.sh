@@ -5,7 +5,7 @@
 # Build the release binaries.
 #
 # Usage: scripts/build-release.sh TAG OUTDIR
-#        scripts/build-release.sh v2026.10.5 dist
+#        scripts/build-release.sh v27.1-rc.1 dist
 #
 # CI runs exactly this on a v* tag (.gitea/workflows/release.yml), so a
 # release can be built and checked on any machine with Go before tagging.
@@ -18,8 +18,10 @@ set -euo pipefail
 
 TAG="${1:?usage: build-release.sh TAG OUTDIR}"
 OUT="${2:?usage: build-release.sh TAG OUTDIR}"
-[[ "$TAG" =~ ^v[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]+)?$ ]] \
-  || { echo "tag $TAG is not v<year>.<month>.<day>[.<n>]" >&2; exit 1; }
+# The suite's release numbers (v27.1, v27.1.3, v27.1-rc.1), or the dated
+# ones the installer had before 27.1 (v2026.10.15.2), for a rebuild of one.
+[[ "$TAG" =~ ^v([1-9][0-9]\.([1-9]|1[0-2])(\.[1-9][0-9]*|-rc\.[1-9][0-9]*)?|[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]+)?)$ ]] \
+  || { echo "tag $TAG is not vYY.M, vYY.M.N or vYY.M-rc.N (or a dated v<year>.<month>.<day>[.<n>])" >&2; exit 1; }
 
 mkdir -p "$OUT"
 for arch in amd64 arm64; do
