@@ -17,7 +17,7 @@ package release
 import "fmt"
 
 // ServerVersion is the inbuxa-server release this installer installs.
-const ServerVersion = "2026.10.28"
+const ServerVersion = "27.1-rc.1"
 
 // ServerImage is that release as a container image.
 const ServerImage = "registry.coffeylabs.org/inbuxa/inbuxa-server:" + ServerVersion
@@ -27,8 +27,8 @@ const ServerImage = "registry.coffeylabs.org/inbuxa/inbuxa-server:" + ServerVers
 // rather than fetched beside the download: a checksum that arrives with the
 // file only proves the file arrived.
 var ServerSHA256 = map[string]string{
-	"amd64": "3720c5ed64b1803e5f454153a16af09b18f2734cc236004d39087552082df807",
-	"arm64": "12df8151d5869169534e1992e629dd2774202948ef473cb28f576ab1e4eec8dd",
+	"amd64": "7d61bae853f12577166daadbfc67575051f0abd8031833bb3293bd32f3072404",
+	"arm64": "23b47606b1236453e40b2840751220cad4a11c3401dd34525322297d63c1da42",
 }
 
 // ServerTarball is where the release's tarball for an architecture is.
@@ -43,15 +43,15 @@ func ServerTarball(arch string) string {
 // unavailable until one does. INBUXA_CONSOLE_TARBALL and
 // INBUXA_WEBMAIL_TARBALL name a local file instead, for testing.
 const (
-	ConsoleVersion = "2026.10.14"
-	ConsoleSHA256  = "5f8a1448cc254adbacaa601f3b01763ac401bc24e1f307f3969404392c046647"
-	WebmailVersion = "2026.10.13-g1299756" // its tag is inbuxa-v<this>
+	ConsoleVersion = "27.1-rc.1"
+	ConsoleSHA256  = "227b55a992b646add211f21ad65a0e1dd94912916acfecb3fbaa669f7b7f790b"
+	WebmailVersion = "27.1-rc.1" // its tag is inbuxa-v<this>
 )
 
 // WebmailSHA256 is the SHA-256 of each architecture's webmail tarball.
 var WebmailSHA256 = map[string]string{
-	"amd64": "cf579536ef19802ccd3b43b3a5fe0f5176e42f86400ca798b74b3355da9fb1d7",
-	"arm64": "df141d0b0e3cdf646899971c6c2997a01fae8cf8e0c83e26e5caebc89169e8d3",
+	"amd64": "354cc1e3ee187f9ef2b4b9b618478aa7a2787b4137f5c8102b3d03d0607bd9e8",
+	"arm64": "e13ba2e68dc0c6c16df0fc07084562313020ef8367b2c3eea09b3bade43f47c0",
 }
 
 // ConsoleTarball is where the console's release tarball is.

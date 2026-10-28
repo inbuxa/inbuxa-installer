@@ -48,9 +48,11 @@ func TestUpgradePlanReadsTheMachine(t *testing.T) {
 func TestHostVersionsComeFromTheirFiles(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "webmail"), 0o755)
-	os.WriteFile(filepath.Join(dir, "webmail", "VERSION"), []byte(release.WebmailVersion[:10]+"+g6e1a1cb\n"), 0o644)
-	if got := installedVersion(dir, plan.Webmail, plan.Host, ""); got != release.WebmailVersion[:10]+"-g6e1a1cb" {
-		t.Errorf("webmail = %q", got)
+	for file, want := range map[string]string{"27.1-rc.1\n": "27.1-rc.1", "2026.10.12+g6e1a1cb\n": "2026.10.12-g6e1a1cb"} {
+		os.WriteFile(filepath.Join(dir, "webmail", "VERSION"), []byte(file), 0o644)
+		if got := installedVersion(dir, plan.Webmail, plan.Host, ""); got != want {
+			t.Errorf("webmail VERSION %q = %q, want %q", file, got, want)
+		}
 	}
 	os.MkdirAll(filepath.Join(dir, "console"), 0o755)
 	os.WriteFile(filepath.Join(dir, "console", releaseMarker), []byte(release.ConsoleSHA256+"\n"), 0o644)
