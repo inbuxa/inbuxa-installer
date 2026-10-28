@@ -43,8 +43,8 @@ func ServerTarball(arch string) string {
 // unavailable until one does. INBUXA_CONSOLE_TARBALL and
 // INBUXA_WEBMAIL_TARBALL name a local file instead, for testing.
 const (
-	ConsoleVersion = "27.1-rc.1"
-	ConsoleSHA256  = "227b55a992b646add211f21ad65a0e1dd94912916acfecb3fbaa669f7b7f790b"
+	ConsoleVersion = "27.1-rc.2"
+	ConsoleSHA256  = "0d5e8a67edc79430e859c7bc67e80e3fb2afc5b8eef96d2840a701e0c5d6a7dc"
 	WebmailVersion = "27.1-rc.1" // its tag is inbuxa-v<this>
 )
 
