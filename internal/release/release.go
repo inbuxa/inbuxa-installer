@@ -7,6 +7,11 @@
 // One version for both shapes, so a server moved from a container to the host
 // is the same program, and the plan, the image tag and the download cannot
 // name three different releases.
+//
+// A release candidate of the installer (v27.1-rc.1) pins the suite's release
+// candidates; a final release pins final releases only. Downloading an RC
+// installer is the opt-in: it is published as a pre-release, so
+// releases/latest, and so a plain install, never reaches one.
 package release
 
 import "fmt"

@@ -45,7 +45,7 @@ echo "$OUT" | grep -v '^    |' | tail -30 | sed 's/^/    /'
 
 echo
 echo "==> the server is a host install"
-/usr/local/bin/inbuxa-server --version 2>&1 | grep -q '[0-9]\{4\}\.[0-9]' && ok "the release binary runs: $(/usr/local/bin/inbuxa-server --version 2>&1 | head -1)" || bad "no runnable /usr/local/bin/inbuxa-server"
+/usr/local/bin/inbuxa-server --version 2>&1 | grep -q '^[0-9]\{2,4\}\.[0-9]' && ok "the release binary runs: $(/usr/local/bin/inbuxa-server --version 2>&1 | head -1)" || bad "no runnable /usr/local/bin/inbuxa-server"
 systemctl is-active --quiet $UNIT && ok "$UNIT is running" || { bad "$UNIT is not running"; journalctl -u $UNIT -n 20 --no-pager | sed 's/^/    /'; }
 systemctl is-enabled --quiet $UNIT && ok "and enabled, so it comes back after a reboot" || bad "$UNIT is not enabled"
 PID=$(systemctl show -p MainPID --value $UNIT)

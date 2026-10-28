@@ -185,9 +185,12 @@ SHA256SUMS to check them against:
     sha256sum --check --ignore-missing SHA256SUMS
     install -m 755 inbuxa-linux-amd64 /usr/local/bin/inbuxa
 
-A release is a `v<year>.<month>.<day>` tag on main; `.gitea/workflows/release.yml`
-builds it with `scripts/build-release.sh`, which builds the same thing
-locally.
+A release is a tag on main named with the INBUXA suite's release number:
+`v27.1` for a series, `v27.1.3` for a patch, `v27.1-rc.1` for a release
+candidate (before 27.1 the tags were dated, `v2026.10.15.2`).
+`.gitea/workflows/release.yml` builds it with `scripts/build-release.sh`, which
+builds the same thing locally. A release candidate is published as a
+pre-release, so `releases/latest` stays on the last final release.
 
 ## Building and testing
 

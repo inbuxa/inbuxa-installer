@@ -113,8 +113,9 @@ func installedVersion(dir string, c plan.Component, s plan.Shape, compose string
 			return "an earlier release"
 		}
 	case plan.Webmail:
-		// Its own VERSION says 2026.10.12+g6e1a1cb; its release tag, and
-		// so the pin, the same with a hyphen.
+		// Its own VERSION says 27.1-rc.1, the pin as it is; a release from
+		// before 27.1 said 2026.10.12+g6e1a1cb, and its pin was the same
+		// with a hyphen.
 		if b, err := os.ReadFile(filepath.Join(dir, "webmail", "VERSION")); err == nil {
 			return strings.ReplaceAll(strings.TrimSpace(string(b)), "+", "-")
 		}
