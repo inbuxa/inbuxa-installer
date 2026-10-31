@@ -152,6 +152,20 @@ This is early. What is built:
   installing. It exits non-zero when they disagree, so a machine can be
   asked in a script whether it still matches itself.
 
+- **`relay install --token -`** -- inbuxa Relay, on a machine of its own in
+  front of the server: the release's static `inbuxa-relay` binary, checked
+  against a checksum in the source and against the inbuxa release keys'
+  signature, owned by a user of its own so an upgrade from the console can
+  replace it, under `inbuxa-relay.service` with ports 25 and 443 and nothing
+  more. It joins with the token the console shows when you add the relay
+  (`--token -` reads it from standard input, `INBUXA_RELAY_JOIN_TOKEN` works
+  too), and refuses on a machine that runs the mail server or where port 25
+  is taken. `--link-listen` puts the link on one address, such as a WireGuard
+  one. Run again, it converges, and leaves a newer binary from the console
+  alone. `relay status` is the relay's own account of itself; `relay
+  uninstall` keeps its state, and `--purge` resets it, which it refuses
+  while it holds mail unless `--discard-held`.
+
 - **Moving the server** -- `install` run again with the other `--server`
   moves the mail server between a container and the host, with its
   configuration and mail. It needs an API key made in the console (`--key -`

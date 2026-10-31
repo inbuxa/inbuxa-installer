@@ -50,6 +50,12 @@ fi
 # INBUXA_WEBMAIL_TARBALL in the case).
 [ -z "${CONSOLE_TARBALL:-}" ] || vm_scp "$CONSOLE_TARBALL" lab@127.0.0.1:/tmp/inbuxa-console-test.tar.gz >/dev/null
 [ -z "${WEBMAIL_TARBALL:-}" ] || vm_scp "$WEBMAIL_TARBALL" lab@127.0.0.1:/tmp/inbuxa-webmail-test.tar.gz >/dev/null
+# A relay binary (INBUXA_RELAY_BINARY in the case), until a release carries
+# one: docker cp it out of an image built from Dockerfile.relay.
+if [ -n "${RELAY_BINARY:-}" ]; then
+  vm_scp "$RELAY_BINARY" lab@127.0.0.1:/tmp/inbuxa-relay-test >/dev/null
+  vm_ssh 'chmod +x /tmp/inbuxa-relay-test'
+fi
 [ -z "${OLD_REF:-}" ] || vm_scp "$LAB/inbuxa-old" lab@127.0.0.1:/tmp/inbuxa-old >/dev/null
 vm_scp "$ROOT/$CASE" lab@127.0.0.1:/tmp/case.sh >/dev/null
 vm_ssh 'chmod +x /tmp/inbuxa /tmp/case.sh; [ ! -f /tmp/inbuxa-old ] || chmod +x /tmp/inbuxa-old'
