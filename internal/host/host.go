@@ -527,3 +527,10 @@ func (f Facts) Port(n int) (Port, bool) {
 	}
 	return Port{}, false
 }
+
+// Systemd says whether systemd runs this machine.
+func Systemd() bool { return isSystemd() }
+
+// HolderOf names the process listening on a port, as well as /proc lets it:
+// "postfix (pid 812)", or "" when it can't tell.
+func HolderOf(port int) string { return holderOf(port) }

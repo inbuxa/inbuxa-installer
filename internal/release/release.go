@@ -14,7 +14,10 @@
 // releases/latest, and so a plain install, never reaches one.
 package release
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ServerVersion is the inbuxa-server release this installer installs.
 const ServerVersion = "27.1-rc.4"
@@ -64,4 +67,61 @@ func ConsoleTarball() string {
 func WebmailTarball(arch string) string {
 	return fmt.Sprintf("https://git.coffeylabs.org/inbuxa/inbuxa-webmail/releases/download/inbuxa-v%s/inbuxa-webmail-linux-%s.tar.gz",
 		WebmailVersion, arch)
+}
+
+// inbuxa Relay, for a machine of its own in front of the server: the
+// static inbuxa-relay binary each server release attaches since
+// inbuxa-server #271, with a .sig file beside it signed by an inbuxa release
+// key. Its release is the server's, so a relay this installer puts in place
+// runs the version the server it joins does. A version with an empty
+// checksum has no relay to install. INBUXA_RELAY_BINARY names a local file
+// instead, for testing.
+//
+// RelaySHA256 is the SHA-256 of each architecture's relay binary.
+var RelaySHA256 = map[string]string{
+	"amd64": "",
+	"arm64": "",
+}
+
+// RelayKeys are the inbuxa release keys that sign a relay binary, as
+// crates/relay-proto/src/release.rs holds them: the CI key, then the one
+// kept offline. Base64url, no padding.
+var RelayKeys = []string{
+	"J0kY_vzXTC8T8gxErBMYI6cVk4Bwki65HlJGoDp15uw",
+	"vGsTE95CJ3vbGKVtfQctFEp0fOZ4wQ9QWTOFe0KF7_8",
+}
+
+// RelayVersion is the server's release as the relay names itself, in its
+// --version and its .sig file: the Cargo version, 27.1.0-rc.4 for 27.1-rc.4.
+func RelayVersion() string { return CargoVersion(ServerVersion) }
+
+// CargoVersion is a release version with the patch number SemVer wants:
+// 27.1 is 27.1.0, and 27.1-rc.4 is 27.1.0-rc.4.
+func CargoVersion(v string) string {
+	core, pre, hasPre := strings.Cut(v, "-")
+	if strings.Count(core, ".") == 1 {
+		core += ".0"
+	}
+	if hasPre {
+		return core + "-" + pre
+	}
+	return core
+}
+
+// RelayTarget is what a relay binary's .sig file names an architecture.
+func RelayTarget(arch string) string {
+	switch arch {
+	case "amd64":
+		return "x86_64-linux-musl"
+	case "arm64":
+		return "aarch64-linux-musl"
+	}
+	return arch + "-linux-musl"
+}
+
+// RelayBinary is where the release's relay binary for an architecture is;
+// its .sig file is beside it, with ".sig" added.
+func RelayBinary(arch string) string {
+	return fmt.Sprintf("https://git.coffeylabs.org/inbuxa/inbuxa-server/releases/download/v%s/inbuxa-relay-%s",
+		ServerVersion, RelayTarget(arch))
 }

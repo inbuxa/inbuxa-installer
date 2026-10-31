@@ -28,6 +28,7 @@ import (
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/discover"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/plan"
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/relay"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/state"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/topology"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/tui"
@@ -58,6 +59,9 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
                              ports present, and with an API key a new
                              order when it needs one
   inbuxa export [-o FILE]    write a topology file from what is here
+  inbuxa relay install|status|uninstall
+                             inbuxa Relay, on a machine of its own in front
+                             of the server
   inbuxa version             this program's version
 
 install flags:
@@ -110,6 +114,20 @@ certs flags:
                              default: postmaster@DOMAIN
   --dry-run                  report, and say what it would do
 
+relay install flags:
+  --token TOKEN              the join token the console shows when you add
+                             the relay; "-" reads it from standard input, and
+                             INBUXA_RELAY_JOIN_TOKEN works too. Not needed
+                             once it has joined
+  --link-listen ADDR         where the server's link reaches it; default
+                             [::]:443, or what an earlier run set
+  --dry-run, --yes           as for install
+
+relay uninstall flags:
+  --purge                    its state too: it leaves its server for good
+  --discard-held             with --purge, even while it holds mail
+  --dry-run, --yes           as for install
+
 deps flags:
   --server/--console/--webmail SHAPE   the shapes to work out the needs for
   --install                  do it, rather than only saying what it would do
@@ -156,6 +174,8 @@ func main() {
 		os.Exit(uninstallCmd(os.Args[2:]))
 	case "certs":
 		os.Exit(certsCmd(os.Args[2:]))
+	case "relay":
+		os.Exit(relayCmd(os.Args[2:]))
 	case "version":
 		fmt.Println(version)
 	case "-h", "--help", "help":
@@ -987,6 +1007,141 @@ func certsCmd(args []string) int {
 		fmt.Printf("\nDone: port %s now presents a certificate for %s from %s, valid until %s.\n",
 			s.Port, o.MailHost, s.Issuer, s.NotAfter.Format("2006-01-02"))
 	}
+	return 0
+}
+
+// relayCmd is inbuxa Relay on this machine, which shares nothing with the
+// suite's install but the way it is asked for.
+func relayCmd(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, "inbuxa relay install|status|uninstall\n\n"+usage)
+		return 2
+	}
+	ctx := context.Background()
+	switch args[0] {
+	case "install":
+		return relayInstall(ctx, args[1:])
+	case "status":
+		if os.Geteuid() != 0 {
+			fmt.Fprintln(os.Stderr, "the relay's status needs root: its state is its user's alone")
+			return 1
+		}
+		if !relay.Status(ctx, os.Stdout) {
+			return 1
+		}
+		return 0
+	case "uninstall":
+		return relayUninstall(ctx, args[1:])
+	case "-h", "--help", "help":
+		fmt.Print(usage)
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "unknown relay command %q: install, status or uninstall\n", args[0])
+	return 2
+}
+
+func relayInstall(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("relay install", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	var (
+		o      relay.Options
+		token  = fs.String("token", os.Getenv("INBUXA_RELAY_JOIN_TOKEN"), "")
+		dryRun = fs.Bool("dry-run", false, "")
+		yes    = fs.Bool("yes", false, "")
+	)
+	fs.StringVar(&o.LinkListen, "link-listen", "", "")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "unexpected %q: the token goes after --token, or \"--token -\" reads it from standard input\n", fs.Arg(0))
+		return 2
+	}
+	// Read before the plan, which needs to know whether there is one; a
+	// plan that then refuses has still read it, and forgets it.
+	t, err := readKey(*token)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 2
+	}
+	o.Token = t
+	p, err := relay.Check(ctx, o)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cannot install the relay: "+err.Error())
+		return 1
+	}
+	fmt.Print(p.String())
+	if *dryRun {
+		return 0
+	}
+	if !*yes {
+		fmt.Fprintln(os.Stderr, "\nNothing has happened yet. Pass --yes to carry this out.")
+		return 1
+	}
+	fmt.Println("\nInstalling:")
+	if err := relay.Install(ctx, p, o, &printer{}); err != nil {
+		fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
+		return 1
+	}
+	fmt.Println()
+	relay.Status(ctx, os.Stdout)
+	fmt.Println("\nDone. Within a few seconds its card in the console says it is linked, and it opens")
+	fmt.Println("port 25 once the server has sent it its settings. `inbuxa relay status` shows it here.")
+	return 0
+}
+
+func relayUninstall(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("relay uninstall", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	var (
+		purge       = fs.Bool("purge", false, "")
+		discardHeld = fs.Bool("discard-held", false, "")
+		dryRun      = fs.Bool("dry-run", false, "")
+		yes         = fs.Bool("yes", false, "")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *discardHeld && !*purge {
+		fmt.Fprintln(os.Stderr, "--discard-held goes with --purge: without it, the held mail is kept")
+		return 2
+	}
+	if !relay.Installed() {
+		fmt.Println("inbuxa Relay isn't installed here.")
+		return 0
+	}
+	remove, keep := relay.UninstallPlan(*purge)
+	fmt.Println("Taken away:")
+	for _, x := range remove {
+		fmt.Println("  - " + x)
+	}
+	if len(keep) > 0 {
+		fmt.Println("\nKept:")
+		for _, x := range keep {
+			fmt.Println("  - " + x)
+		}
+	}
+	if *purge {
+		fmt.Println("\nWorth knowing:")
+		fmt.Println("  - Remove it in the console too (the bin on its card), or the server goes on trying to link to it.")
+	}
+	if *dryRun {
+		return 0
+	}
+	if !*yes {
+		fmt.Fprintln(os.Stderr, "\nNothing has happened yet. Pass --yes to carry this out.")
+		return 1
+	}
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "uninstalling needs root")
+		return 1
+	}
+	fmt.Println("\nUninstalling:")
+	if err := relay.Uninstall(ctx, *purge, *discardHeld, &printer{}); err != nil {
+		fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
+		return 1
+	}
+	fmt.Println("\nDone.")
 	return 0
 }
 
