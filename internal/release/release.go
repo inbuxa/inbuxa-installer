@@ -12,7 +12,7 @@ package release
 import "fmt"
 
 // ServerVersion is the inbuxa-server release this installer installs.
-const ServerVersion = "2026.10.15"
+const ServerVersion = "2026.10.29.1"
 
 // ServerImage is that release as a container image.
 const ServerImage = "registry.coffeylabs.org/inbuxa/inbuxa-server:" + ServerVersion
@@ -22,8 +22,8 @@ const ServerImage = "registry.coffeylabs.org/inbuxa/inbuxa-server:" + ServerVers
 // rather than fetched beside the download: a checksum that arrives with the
 // file only proves the file arrived.
 var ServerSHA256 = map[string]string{
-	"amd64": "4f794c187a823d789556aa3325aa39c878bec07a905f28d75296910162a1d7a7",
-	"arm64": "67dcc41e203c36fac0e61f69517ba44055635e6987a0548835ea8ef460b5b692",
+	"amd64": "6fd2d097a11cdb35a724018113891d1255313f0a56e3c6c419772ba0ac73fe0b",
+	"arm64": "610eebcac4041eeee12eb13bc6d76f52429f53fcc84812dea52c48e1304d57e4",
 }
 
 // ServerTarball is where the release's tarball for an architecture is.
@@ -38,15 +38,15 @@ func ServerTarball(arch string) string {
 // unavailable until one does. INBUXA_CONSOLE_TARBALL and
 // INBUXA_WEBMAIL_TARBALL name a local file instead, for testing.
 const (
-	ConsoleVersion = "2026.10.14"
-	ConsoleSHA256  = "5f8a1448cc254adbacaa601f3b01763ac401bc24e1f307f3969404392c046647"
-	WebmailVersion = "2026.10.13-g1299756" // its tag is inbuxa-v<this>
+	ConsoleVersion = "2026.10.26.5"
+	ConsoleSHA256  = "c5085550585cd7e58b512afadc33f1c4719888baa441bc79882aa9f3c31c54ad"
+	WebmailVersion = "2026.10.26-gcff6f1f" // its tag is inbuxa-v<this>
 )
 
 // WebmailSHA256 is the SHA-256 of each architecture's webmail tarball.
 var WebmailSHA256 = map[string]string{
-	"amd64": "cf579536ef19802ccd3b43b3a5fe0f5176e42f86400ca798b74b3355da9fb1d7",
-	"arm64": "df141d0b0e3cdf646899971c6c2997a01fae8cf8e0c83e26e5caebc89169e8d3",
+	"amd64": "851ef48ae71e349c6ff2772618a1afad0e664ba5ee94041a661b13da1c282a38",
+	"arm64": "852b9f85423b9b73600fddf7d2cdefc6b58473fa157db8d9df31384e746ee1dd",
 }
 
 // ConsoleTarball is where the console's release tarball is.

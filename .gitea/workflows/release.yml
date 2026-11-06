@@ -9,7 +9,8 @@
 # minute, and the BUILD_ON switch has nothing to offload. GitHub's copy of the
 # Release is made with ~/.config/gitea-mirror/release-sync.py.
 #
-# The tag must be annotated and on main, and named v<year>.<month>.<day>[.<n>]
+# The tag must be annotated and on main or release/2026 (the dated line,
+# which keeps getting fixes until 27.1 ships), and named v<year>.<month>.<day>[.<n>]
 # (scripts/build-release.sh checks the name). Its annotation is the release
 # notes. The Release is a draft until every file is attached, so it is never
 # visible half-filled; a draft this run made is deleted if an upload fails.
@@ -40,11 +41,13 @@ jobs:
       - uses: coffey-labs/actions/checkout@fab0c4d45e0162963965f1555df27b7bed5e20ec
         with:
           fetch-depth: 0
-      - name: The tag is annotated and on main
+      - name: The tag is annotated and on main or release/2026
         run: |
           set -eu
-          git merge-base --is-ancestor "$(git rev-parse "$TAG^{commit}")" origin/main \
-            || { echo "$TAG is not on main" >&2; exit 1; }
+          c="$(git rev-parse "$TAG^{commit}")"
+          git merge-base --is-ancestor "$c" origin/main \
+            || git merge-base --is-ancestor "$c" origin/release/2026 \
+            || { echo "$TAG is not on main or release/2026" >&2; exit 1; }
           [ "$(git cat-file -t "refs/tags/$TAG")" = tag ] \
             || { echo "$TAG is a lightweight tag; its annotation is the release notes" >&2; exit 1; }
       - run: go test -count=1 ./...
