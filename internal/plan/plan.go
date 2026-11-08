@@ -83,7 +83,9 @@ type Options struct {
 	// come from, when it is not what the webmail's name resolves to.
 	ExemptAddress string
 	// Key is an API key for what changes a running server's own settings:
-	// moving it between a container and the host. Never written down.
+	// moving it between a container and the host, and fitting its HTTPS
+	// listener to --proxy snippets' name router on an install from before
+	// it (#48). Never written down.
 	Key string
 
 	// Where this came from, when it came from a topology file: the machine's
@@ -413,7 +415,8 @@ func Build(f host.Facts, o Options) (Plan, error) {
 			p.Steps = append(p.Steps, Step{
 				Title: "Write proxy configuration for the web server already here",
 				Detail: []string{
-					o.Dir + "/proxy/nginx-inbuxa.conf and " + o.Dir + "/proxy/Caddyfile.fragment",
+					o.Dir + "/proxy/nginx-inbuxa.conf with nginx-inbuxa-stream.conf, and " + o.Dir + "/proxy/Caddyfile.fragment",
+					"nginx routes 443 by name: the console and the webmail with your certificates, the mail server's names passed through to its own HTTPS on 127.0.0.1:8443",
 					"nothing is loaded or restarted: that stays yours",
 					"the server trusts your web server's X-Forwarded-For and exempts it from the auto-ban",
 					"the mail server's own certificates: turned on in the console once it is loaded",

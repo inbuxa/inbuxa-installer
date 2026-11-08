@@ -382,8 +382,9 @@ func (c *Client) Listeners(ctx context.Context) ([]Listener, error) {
 // ContainerListeners undoes HostListeners, for a server moving from the host
 // into a container: every listener back on [::], plain HTTP on 8080, which
 // is what the compose file publishes. The HTTPS listener HostListeners took
-// away is not put back: the proxy terminates TLS in front of a container as
-// well, and the container's 443 is not published. Like any listener change
+// away is not put back here: a proxy in the project terminates TLS in front
+// of a container as well, and the container's 443 is not published. With
+// --proxy snippets, PassThroughListener puts it back afterwards. Like any listener change
 // it takes effect when the server next starts.
 func (c *Client) ContainerListeners(ctx context.Context) error {
 	ls, err := c.Listeners(ctx)
@@ -488,6 +489,58 @@ func (c *Client) HostListeners(ctx context.Context, httpBind string, local bool)
 	}
 	if len(destroy) > 0 {
 		args["destroy"] = destroy
+	}
+	rs, err := c.Do(ctx, Call{"x:NetworkListener/set", args, "0"})
+	if err != nil {
+		return err
+	}
+	_, err = DecodeSet(rs[0])
+	return err
+}
+
+// PassThroughListener fits the server's HTTPS listener to a web server in
+// front of it that routes TLS by name and passes the server's names through
+// untouched (#48). The listener is bound where that web server sends them,
+// and takes the PROXY protocol header from the addresses in trusted, so the
+// server sees each client's own address. It serves its own certificates
+// then, for every domain it has, and its _443._tcp TLSA records match what
+// is served.
+//
+// A connection from a trusted address that does not start with the header is
+// refused, which is why trusted is only that web server's own address: no
+// one else connects to the listener from there. If there is no HTTPS
+// listener, as after HostListeners, one is created. Like any listener
+// change it takes effect when the server next starts.
+func (c *Client) PassThroughListener(ctx context.Context, bind string, trusted []string) error {
+	ls, err := c.Listeners(ctx)
+	if err != nil {
+		return err
+	}
+	nets := map[string]bool{}
+	for _, t := range trusted {
+		if !strings.Contains(t, "/") {
+			if strings.Contains(t, ":") {
+				t += "/128"
+			} else {
+				t += "/32"
+			}
+		}
+		nets[t] = true
+	}
+	fitted := map[string]any{
+		"bind":                         map[string]bool{bind: true},
+		"overrideProxyTrustedNetworks": nets,
+	}
+	args := map[string]any{}
+	for _, l := range ls {
+		if l.Protocol == "http" && l.TLSImplicit {
+			args["update"] = map[string]any{l.ID: fitted}
+			break
+		}
+	}
+	if len(args) == 0 {
+		fitted["name"], fitted["protocol"], fitted["useTls"], fitted["tlsImplicit"] = "https", "http", true, true
+		args["create"] = map[string]any{"https": fitted}
 	}
 	rs, err := c.Do(ctx, Call{"x:NetworkListener/set", args, "0"})
 	if err != nil {

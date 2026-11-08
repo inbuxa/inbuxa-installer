@@ -4,24 +4,65 @@
 # /etc/nginx/conf.d/ (or sites-enabled/), set each ssl_certificate pair to the
 # certificate you have for those names, check it with `nginx -t`, and reload.
 # The installer loads nothing and restarts nothing; this is yours to adjust.
+{{- if .RoutesByName}}
+#
+# It works with nginx-inbuxa-stream.conf beside it, which holds port 443 and
+# routes it by name: that one is included from nginx.conf itself, and says
+# how. Port 443 here is that router's, so nothing below listens on it.
+#
+# Everything is passed to loopback, where the installer put each program:
+#   127.0.0.1:8081  the mail server's plain HTTP, for its certificate
+#                   challenges on port 80
+#   {{.PassThroughBind}}  the mail server's own HTTPS, which the name router
+#                   passes its names to untouched
+#   127.0.0.1:8082  the console
+#   127.0.0.1:8080  the webmail
+#
+# The console and the webmail arrive from the router on {{.FrontTLSBind}},
+# with the PROXY protocol header, so $remote_addr is still the client's.
+{{- else}}
 #
 # Everything is passed to loopback, where the installer put each program:
 #   127.0.0.1:8081  the mail server's web side (JMAP, CalDAV, CardDAV,
 #                   autoconfig, MTA-STS)
 #   127.0.0.1:8082  the console
 #   127.0.0.1:8080  the webmail
+{{- if .ServesServer}}
+#
+# This terminates TLS for the mail server's names with your certificate, so
+# a domain added to the server later has to be added here by hand, and the
+# server's _443._tcp TLSA records describe its own certificate rather than
+# this one. Run the installer again with --key (an administrator's API key)
+# to have nginx pass the server's names through to it instead (#48).
+{{- end}}
+{{- end}}
 #
 # The mail server trusts X-Forwarded-For from here, so every block sets it to
 # the client's own address rather than passing on what the client sent.
+{{- define "tls-listen"}}
+{{- if .RoutesByName}}
+    listen {{.FrontTLSBind}} ssl proxy_protocol;
+    http2 on;
+    set_real_ip_from 127.0.0.1;
+    real_ip_header proxy_protocol;
+{{- else}}
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+{{- end}}
+{{- end}}
 {{- if .ServesServer}}
 
 # Port 80 for the server's names: its own certificate challenges, which it
 # answers itself once certificates are turned on in the console, and a
-# redirect for everything else.
+# redirect for everything else. The pattern catches the same four names of
+# any domain added to the server later; another name the server gets a
+# certificate for goes on the server_name line too.
 server {
     listen 80;
     listen [::]:80;
-    server_name {{join .ServerNames " "}};
+    server_name {{join .ServerNames " "}}
+                ~^(autoconfig|autodiscover|mta-sts|ua-auto-config)\.;
 
     location /.well-known/acme-challenge/ {
         proxy_pass http://127.0.0.1:8081;
@@ -32,6 +73,8 @@ server {
         return 308 https://$host$request_uri;
     }
 }
+
+{{- if not .RoutesByName}}
 
 # The mail server's web side. Push arrives as a long-lived stream, so it is
 # not buffered and not timed out early.
@@ -59,6 +102,7 @@ server {
     }
 }
 {{- end}}
+{{- end}}
 {{- if or .Console .ConsoleFiles}}
 
 # The console: static files. It talks to the mail server from the browser,
@@ -70,9 +114,7 @@ server {
     return 308 https://$host$request_uri;
 }
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
+{{- template "tls-listen" .}}
     server_name {{.ConsoleHost}};
 
     ssl_certificate     /etc/ssl/inbuxa/{{.ConsoleHost}}.fullchain.pem;
@@ -112,9 +154,7 @@ server {
     return 308 https://$host$request_uri;
 }
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
+{{- template "tls-listen" .}}
     server_name {{.WebmailHost}};
 
     ssl_certificate     /etc/ssl/inbuxa/{{.WebmailHost}}.fullchain.pem;

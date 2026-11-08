@@ -83,7 +83,9 @@ install flags:
                              machine lacks, rather than refusing over it
   --key KEY                  an API key made in the console, needed only to
                              move the server between a container and the host
-                             (run install again with the other --server);
+                             (run install again with the other --server), and
+                             to move a --proxy snippets install made before
+                             nginx passed the server's names through to it;
                              "-" reads it from standard input, and
                              INBUXA_API_KEY works too
   --dry-run                  print the plan and stop
@@ -252,7 +254,7 @@ func install(args []string) int {
 		fmt.Fprintln(os.Stderr, "\nNothing has happened yet. Pass --yes to carry this out.")
 		return 1
 	}
-	if moving {
+	if moving || *key != "" {
 		k, err := readKey(*key)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
