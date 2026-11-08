@@ -173,3 +173,19 @@ server {
     }
 }
 {{- end}}
+{{- if .RoutesByName}}
+
+# Any other name asked of {{.FrontTLSBind}}: 421, so the browser opens a new
+# connection for it. A browser reuses a connection for every name its
+# certificate covers, so with one certificate for the console's, the
+# webmail's and the mail server's names, a request for the mail server can
+# arrive here over the webmail's connection, without the router seeing its
+# name. Answered from here, it would get the console or the webmail. No
+# certificate: the router sends this port only the two names above, and a
+# handshake for any other is refused.
+server {
+    listen {{.FrontTLSBind}} ssl proxy_protocol default_server;
+    ssl_reject_handshake on;
+    return 421;
+}
+{{- end}}
