@@ -205,3 +205,99 @@ func TestFrontEndsOnTheHost(t *testing.T) {
 		t.Errorf("nginx-inbuxa.conf:\n%s", nginx)
 	}
 }
+
+// #48: with names routed on 443, the server's names are not terminated in
+// nginx at all; the router passes them, and any name it does not know, to the
+// server's own HTTPS with the PROXY protocol header.
+func TestProxySnippetsRouteByName(t *testing.T) {
+	dir := t.TempDir()
+	s := stack(false)
+	s.Proxy, s.PassThrough = false, true
+	out, err := WriteProxySnippets(dir, *s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nginx, _ := os.ReadFile(filepath.Join(out, "nginx-inbuxa.conf"))
+	stream, err := os.ReadFile(filepath.Join(out, "nginx-inbuxa-stream.conf"))
+	if err != nil {
+		t.Fatal("no stream configuration written")
+	}
+	for _, want := range []string{
+		"stream {", "ssl_preread on;", "proxy_protocol on;",
+		"admin.example.com inbuxa_front;", "webmail.example.com inbuxa_front;", "default inbuxa_server;",
+		"server 127.0.0.1:8443;", "server 127.0.0.1:8444;", "listen 443;",
+		"include " + dir + "/proxy/nginx-inbuxa-stream.conf;", "libnginx-mod-stream",
+	} {
+		if !strings.Contains(string(stream), want) {
+			t.Errorf("nginx-inbuxa-stream.conf lacks %q", want)
+		}
+	}
+	for _, want := range []string{
+		"listen 127.0.0.1:8444 ssl proxy_protocol;", "real_ip_header proxy_protocol;",
+		"~^(autoconfig|autodiscover|mta-sts|ua-auto-config)\\.;",
+		"location /.well-known/acme-challenge/",
+	} {
+		if !strings.Contains(string(nginx), want) {
+			t.Errorf("nginx-inbuxa.conf lacks %q", want)
+		}
+	}
+	for _, bad := range []string{"listen 443", "/etc/ssl/inbuxa/mail.example.com"} {
+		if strings.Contains(string(nginx), bad) {
+			t.Errorf("nginx-inbuxa.conf still has %q: the router holds 443 and the server's names are its own", bad)
+		}
+	}
+	if strings.Count(string(nginx), "listen 127.0.0.1:8444") != 2 {
+		t.Errorf("the console and the webmail are not both behind the router:\n%s", nginx)
+	}
+
+	c, _ := render(t, s)
+	if !strings.Contains(c, `- "127.0.0.1:8443:443"`) {
+		t.Errorf("the server's HTTPS is not published for the router:\n%s", c)
+	}
+}
+
+// An install from before #48, not yet run again with --key: the layout it has
+// stays, and says how to move.
+func TestProxySnippetsWithoutRoutingStayAsTheyWere(t *testing.T) {
+	dir := t.TempDir()
+	s := stack(false)
+	s.Proxy = false
+	os.MkdirAll(filepath.Join(dir, "proxy"), 0o755)
+	os.WriteFile(filepath.Join(dir, "proxy", "nginx-inbuxa-stream.conf"), []byte("stale"), 0o644)
+	out, err := WriteProxySnippets(dir, *s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "nginx-inbuxa-stream.conf")); err == nil {
+		t.Error("a stream configuration is left for a layout that has none")
+	}
+	nginx, _ := os.ReadFile(filepath.Join(out, "nginx-inbuxa.conf"))
+	for _, want := range []string{"listen 443 ssl;", "/etc/ssl/inbuxa/mail.example.com.fullchain.pem", "--key", "#48"} {
+		if !strings.Contains(string(nginx), want) {
+			t.Errorf("nginx-inbuxa.conf lacks %q", want)
+		}
+	}
+	c, _ := render(t, s)
+	if strings.Contains(c, ":443\"") {
+		t.Errorf("the server's HTTPS is published without the router:\n%s", c)
+	}
+}
+
+// The front ends joined to a server elsewhere: nothing to pass through, so no
+// router, whatever PassThrough says.
+func TestProxySnippetsForJoinedFrontEndsDoNotRoute(t *testing.T) {
+	s := stack(false)
+	s.Server, s.Proxy, s.PassThrough = false, false, true
+	s.RemoteServerURL = "https://mail.example.com"
+	out, err := WriteProxySnippets(t.TempDir(), *s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "nginx-inbuxa-stream.conf")); err == nil {
+		t.Error("a router was written with no server here")
+	}
+	nginx, _ := os.ReadFile(filepath.Join(out, "nginx-inbuxa.conf"))
+	if !strings.Contains(string(nginx), "listen 443 ssl;") {
+		t.Errorf("nginx-inbuxa.conf:\n%s", nginx)
+	}
+}

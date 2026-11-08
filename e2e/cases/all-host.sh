@@ -20,7 +20,7 @@ D=example.test
 [ -f /tmp/inbuxa-webmail-test.tar.gz ] && export INBUXA_WEBMAIL_TARBALL=/tmp/inbuxa-webmail-test.tar.gz
 
 echo "==> a machine with nginx, and no container runtime"
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx openssl >/dev/null 2>&1
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nginx libnginx-mod-stream openssl >/dev/null 2>&1
 systemctl is-active --quiet nginx && ok "nginx is running" || { bad "no nginx"; exit 1; }
 
 echo
@@ -41,6 +41,7 @@ for n in mail.$D admin.$D webmail.$D; do
     -keyout /etc/ssl/inbuxa/$n.key.pem -out /etc/ssl/inbuxa/$n.fullchain.pem 2>/dev/null
 done
 cp $DIR/proxy/nginx-inbuxa.conf /etc/nginx/conf.d/inbuxa.conf
+echo "include $DIR/proxy/nginx-inbuxa-stream.conf;" >> /etc/nginx/nginx.conf
 nginx -t >/dev/null 2>&1 && ok "nginx -t accepts it" || { bad "nginx -t"; nginx -t 2>&1 | sed 's/^/    /'; }
 systemctl reload nginx; sleep 3
 via() { curl -sk --resolve "$1:443:127.0.0.1" "${@:2}"; }
@@ -53,6 +54,12 @@ via admin.$D -D - -o /dev/null "https://admin.$D$ASSET" | grep -qi "cache-contro
 via webmail.$D https://webmail.$D/api/health | grep -q '"ok":true' && ok "the webmail is healthy through nginx" || bad "the webmail through nginx"
 CODE=$(via mail.$D -o /dev/null -w '%{http_code}' https://mail.$D/.well-known/jmap)
 case "$CODE" in 30*|200|401) ok "the mail server through nginx ($CODE)" ;; *) bad "the server through nginx: $CODE" ;; esac
+# Passed through to the server's own HTTPS on loopback, not nginx's (#48).
+MAIL_FP=$(echo | timeout 10 openssl s_client -connect 127.0.0.1:443 -servername mail.$D 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null)
+[ -n "$MAIL_FP" ] && [ "$MAIL_FP" != "$(openssl x509 -in /etc/ssl/inbuxa/mail.$D.fullchain.pem -noout -fingerprint -sha256)" ] \
+  && ok "mail.$D is served the server's own certificate" || bad "mail.$D is served nginx's certificate"
+ss -Hltn 'sport = :8443' | grep -q '127.0.0.1:8443' && ! ss -Hltn 'sport = :8443' | grep -qv '127.0.0.1:8443' \
+  && ok "the server's HTTPS is on 127.0.0.1:8443 only" || bad "8443: $(ss -Hltn 'sport = :8443' | awk '{print $4}' | tr '\n' ' ')"
 # The server gives a code for the webmail's own address only if it knows the
 # webmail's client: registered from the secret in its environment.
 USER=$(awk '/^first mailbox/ {print $3}' "$DIR/credentials.txt")

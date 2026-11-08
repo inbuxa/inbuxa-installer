@@ -13,6 +13,14 @@
 # The mail server's names. Caddy uses TLS-ALPN-01 for them and leaves HTTP-01
 # on port 80 to the mail server, which needs a certificate of its own for
 # IMAP and SMTP: so neither answers the other's challenge.
+#
+# Caddy can't pass TLS through by name without the layer4 plugin, so it
+# terminates these names itself, with certificates of its own. Two things
+# follow. A domain added to the server later is not here: add its names to
+# both blocks below. And with TLSA records published, the server's _443._tcp
+# ones describe its own certificate, not Caddy's, so they don't match on 443
+# (the mail ports are unaffected). The nginx configuration beside this passes
+# the server's names through to the server instead.
 {{join .ServerNames ", "}} {
 	tls {
 		issuer acme {

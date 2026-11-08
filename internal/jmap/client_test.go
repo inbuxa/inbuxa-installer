@@ -223,3 +223,47 @@ func TestHostListenersRefusalIsAnError(t *testing.T) {
 		t.Fatal("a refused destroy was not reported")
 	}
 }
+
+func TestPassThroughListenerTakesPROXYFromTheWebServerOnly(t *testing.T) {
+	c, seen := fake(t, map[string]string{
+		"x:NetworkListener/query": defaultListeners,
+		"x:NetworkListener/set":   `{"methodResponses":[["x:NetworkListener/set",{"updated":{"b":null}},"0"]]}`,
+	})
+	if err := c.PassThroughListener(context.Background(), "127.0.0.1:8443", []string{"127.0.0.1"}); err != nil {
+		t.Fatal(err)
+	}
+	args := (*seen)[1]["args"].(map[string]any)
+	update := args["update"].(map[string]any)
+	if len(update) != 1 || args["create"] != nil {
+		t.Fatalf("set %v, want only the HTTPS listener updated", args)
+	}
+	b := update["b"].(map[string]any)
+	if bind := b["bind"].(map[string]any); len(bind) != 1 || bind["127.0.0.1:8443"] != true {
+		t.Errorf("bind = %v", bind)
+	}
+	if nets := b["overrideProxyTrustedNetworks"].(map[string]any); len(nets) != 1 || nets["127.0.0.1/32"] != true {
+		t.Errorf("trusted = %v, want the web server's address alone", nets)
+	}
+}
+
+func TestPassThroughListenerPutsBackAnHTTPSListener(t *testing.T) {
+	c, seen := fake(t, map[string]string{
+		"x:NetworkListener/query": `{"methodResponses":[["x:NetworkListener/query",{"ids":["c"]},"0"],["x:NetworkListener/get",{"list":[
+			{"id":"c","name":"http","protocol":"http","tlsImplicit":false,"bind":{"127.0.0.1:8081":true}}]},"1"]]}`,
+		"x:NetworkListener/set": `{"methodResponses":[["x:NetworkListener/set",{"created":{"https":{"id":"d"}}},"0"]]}`,
+	})
+	if err := c.PassThroughListener(context.Background(), "[::]:443", []string{"172.31.253.1"}); err != nil {
+		t.Fatal(err)
+	}
+	args := (*seen)[1]["args"].(map[string]any)
+	if args["update"] != nil {
+		t.Errorf("the plain HTTP listener was changed: %v", args["update"])
+	}
+	https := args["create"].(map[string]any)["https"].(map[string]any)
+	if https["protocol"] != "http" || https["tlsImplicit"] != true || https["useTls"] != true {
+		t.Errorf("created %v, want an implicit-TLS HTTP listener", https)
+	}
+	if nets := https["overrideProxyTrustedNetworks"].(map[string]any); nets["172.31.253.1/32"] != true {
+		t.Errorf("trusted = %v", nets)
+	}
+}

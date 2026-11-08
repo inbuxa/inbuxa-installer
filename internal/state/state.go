@@ -38,6 +38,11 @@ type State struct {
 	Updated   time.Time         `json:"updated"`             //
 	Installer string            `json:"installer,omitempty"` // the version that wrote this
 
+	// PassThrough is whether the server's HTTPS listener was fitted to the
+	// name router --proxy snippets writes for nginx (#48). Installs from
+	// before it are moved over by a run with --key.
+	PassThrough bool `json:"passThrough,omitempty"`
+
 	// RemovedAt is when `inbuxa uninstall` took the programs away and kept
 	// the data. The shapes stay, so `install` run again picks the data up
 	// rather than trying a first boot on a server configured long ago.

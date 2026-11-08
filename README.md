@@ -48,11 +48,19 @@ This is early. What is built:
 
 - **`--proxy snippets`** -- for a machine that already runs nginx or Caddy:
   nothing here takes 80 or 443, and the installer writes
-  `<dir>/proxy/nginx-inbuxa.conf` and `<dir>/proxy/Caddyfile.fragment` for
-  that web server to load, trusts it in front of the suite (its
-  X-Forwarded-For, and an exemption from the auto-ban), and leaves loading
-  and reloading to you. Once it is loaded, the mail server's own
-  certificates are turned on in the console. `--proxy none` writes nothing.
+  `<dir>/proxy/nginx-inbuxa.conf` with `<dir>/proxy/nginx-inbuxa-stream.conf`,
+  and `<dir>/proxy/Caddyfile.fragment`, for that web server to load, trusts
+  it in front of the suite (its X-Forwarded-For, and an exemption from the
+  auto-ban), and leaves loading and reloading to you. nginx routes 443 by
+  name: it terminates the console and the webmail with your certificates and
+  passes every other name, untouched and with the PROXY protocol header, to
+  the mail server's own HTTPS on 127.0.0.1:8443. So the server serves its own
+  certificates for every domain it has, a domain added later included, and
+  its `_443._tcp` TLSA records match. Caddy can't route TLS by name without
+  a plugin, so its fragment terminates the server's names itself. An install
+  made before nginx worked this way keeps its layout until `install` is run
+  again with `--key`. Once it is loaded, the mail server's own certificates
+  are turned on in the console. `--proxy none` writes nothing.
 
 - **`survey`** -- the machine's facts: distribution, init, whether Docker is
   usable *by this user*, Node's version, which of the suite's ports are free

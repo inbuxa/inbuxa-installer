@@ -44,6 +44,14 @@ type Stack struct {
 	Webmail bool
 	Proxy   bool
 
+	// PassThrough is the operator's own web server (--proxy snippets)
+	// routing 443 by name: the console and the webmail it terminates
+	// itself, and every other name it passes through untouched, with the
+	// PROXY protocol header, to the server's own HTTPS listener on
+	// PassThroughBind (#48). Installs from before it terminate the server's
+	// names in that web server, until the installer is run again with --key.
+	PassThrough bool
+
 	// HostServer is a mail server running on this machine but outside the
 	// project, under systemd. The front ends and the proxy then reach it on
 	// loopback, so the ones that talk to it -- the webmail and Caddy -- share
@@ -326,12 +334,33 @@ func secret() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
+// Where the operator's web server and the server meet on loopback when
+// 443 is routed by name (Stack.PassThrough): the server's HTTPS listener,
+// published there from a container, and the web server's own TLS for the
+// console and the webmail, which its name router hands on to.
+const (
+	PassThroughBind = "127.0.0.1:8443"
+	FrontTLSBind    = "127.0.0.1:8444"
+)
+
+// PassThroughBind and FrontTLSBind, for the templates.
+func (Stack) PassThroughBind() string { return PassThroughBind }
+func (Stack) FrontTLSBind() string    { return FrontTLSBind }
+
+// RoutesByName is whether the nginx configuration routes 443 by name: only
+// with a server here to pass names through to.
+func (s Stack) RoutesByName() bool { return s.PassThrough && s.ServesServer() }
+
 // ProxySnippets are the files --proxy snippets writes, for the web server the
 // operator already runs: an nginx configuration and a Caddyfile fragment.
+// With RoutesByName there is a third, nginx's name router, which goes in its
+// own file because it belongs outside nginx's http block.
 var ProxySnippets = map[string]string{
 	"nginx-inbuxa.conf.tmpl":  "nginx-inbuxa.conf",
 	"Caddyfile.fragment.tmpl": "Caddyfile.fragment",
 }
+
+const streamSnippet = "nginx-inbuxa-stream.conf"
 
 // WriteProxySnippets writes them into dir/proxy and returns that directory.
 // Nothing is loaded or reloaded: that web server is the operator's.
@@ -342,7 +371,16 @@ func WriteProxySnippets(dir string, s Stack) (string, error) {
 	}
 	s.Dir = dir
 	funcs := template.FuncMap{"join": strings.Join}
+	files := map[string]string{}
 	for name, file := range ProxySnippets {
+		files[name] = file
+	}
+	if s.RoutesByName() {
+		files[streamSnippet+".tmpl"] = streamSnippet
+	} else if err := os.Remove(filepath.Join(out, streamSnippet)); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	for name, file := range files {
 		t, err := template.New(name).Funcs(funcs).ParseFS(templates, "templates/"+name)
 		if err != nil {
 			return "", err

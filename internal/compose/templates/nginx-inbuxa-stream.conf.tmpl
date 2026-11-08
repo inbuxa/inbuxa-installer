@@ -1,0 +1,56 @@
+# Written by the inbuxa installer {{.Version}} for {{.Domain}}.
+#
+# nginx's name router for port 443, which nginx-inbuxa.conf beside it needs.
+# It goes outside the http block, so include it from the top of
+# /etc/nginx/nginx.conf, next to `events`, not from conf.d/:
+#
+#   include {{.Dir}}/proxy/nginx-inbuxa-stream.conf;
+#
+# It needs nginx's stream module: libnginx-mod-stream on Debian and Ubuntu,
+# nginx-mod-stream on the Red Hat family. Check with `nginx -t` and reload.
+# The installer loads nothing and restarts nothing.
+#
+# It reads the name a client asks for (SNI) and decrypts nothing itself:
+{{- if or .Console .ConsoleFiles .ServesWebmail}}
+#   - the console and the webmail go to nginx's own TLS on {{.FrontTLSBind}}
+#     (in nginx-inbuxa.conf), with your certificates;
+{{- end}}
+#   - every other name goes to the mail server's own HTTPS on
+#     {{.PassThroughBind}}, untouched. It has certificates of its own for
+#     each of its domains, a domain added later included, and its _443._tcp
+#     TLSA records match what it serves.
+# Both are sent the PROXY protocol header first, so they see the client's own
+# address. The server takes that header only from where nginx connects, and
+# refuses a connection from there without it.
+#
+# nginx allows one stream block. If you have one already, move the map, the
+# two upstreams and the server into it. Any site of your own that listens on
+# 443 in the http block has to move off it, to {{.FrontTLSBind}} like the
+# console, with its name added to the map: otherwise this port is taken
+# twice, and its name would be sent to the mail server.
+stream {
+    map $ssl_preread_server_name $inbuxa_upstream {
+{{- if or .Console .ConsoleFiles}}
+        {{.ConsoleHost}} inbuxa_front;
+{{- end}}
+{{- if .ServesWebmail}}
+        {{.WebmailHost}} inbuxa_front;
+{{- end}}
+        default inbuxa_server;
+    }
+
+    upstream inbuxa_server {
+        server {{.PassThroughBind}};
+    }
+    upstream inbuxa_front {
+        server {{.FrontTLSBind}};
+    }
+
+    server {
+        listen 443;
+        listen [::]:443;
+        ssl_preread on;
+        proxy_pass $inbuxa_upstream;
+        proxy_protocol on;
+    }
+}

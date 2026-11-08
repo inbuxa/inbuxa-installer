@@ -28,6 +28,11 @@ services:
     restart: unless-stopped
     ports:
       - "{{.ServerBind}}:8080"
+{{- if .PassThrough}}
+      # Its own HTTPS, for your web server, which passes the server's names
+      # through to it untouched.
+      - "{{.PassThroughBind}}:443"
+{{- end}}
 {{- range .MailPorts}}
       - "{{.}}:{{.}}"
 {{- end}}

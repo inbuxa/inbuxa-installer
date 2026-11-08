@@ -146,6 +146,23 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		WebmailBind:  "127.0.0.1:8080",
 		Subnet:       DefaultSubnet,
 	}
+	// With --proxy snippets the operator's nginx routes 443 by name, and the
+	// server serves its own names with its own certificates (#48). A new
+	// install is set up that way. One from before keeps the layout it has
+	// until it is run with an API key, which fitting the server's listener
+	// takes: a rewritten nginx file in front of a server not fitted for it
+	// would break every one of the server's names at the next reload.
+	snippets := !o.Local && o.Proxy == "snippets"
+	fitRouter := false
+	if snippets {
+		prior, err := state.Load()
+		switch {
+		case err != nil || !prior.Installed() || prior.PassThrough:
+			stack.PassThrough = true
+		case o.Key != "":
+			stack.PassThrough, fitRouter = true, true
+		}
+	}
 	if o.Local {
 		// Nothing is published and nothing is certified: the addresses are
 		// the loopback binds, which is what the front ends are told to use.
@@ -289,11 +306,27 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	// front end used to do, and why it could not.
 	if existing, err := state.Load(); err == nil && existing.Installed() {
 		if mv != nil {
-			if err := mv.finish(ctx, stack, !o.Local && o.Proxy == "snippets"); err != nil {
+			if err := mv.finish(ctx, stack, snippets); err != nil {
 				return nil, err
 			}
 			// What it reads at start has been read: nothing more to restart for.
 			serverChanged = false
+		}
+		// A move fits the listeners to the new shape and leaves no HTTPS
+		// listener on the host, so the router's is fitted again after one.
+		if stack.PassThrough && (fitRouter || mv != nil) {
+			log.Step("fitting the server's HTTPS to your web server's name router")
+			srv := &jmap.Client{BaseURL: "http://" + hostFinalBind, Token: o.Key}
+			if err := routeByName(ctx, srv, stack, onHost); err != nil {
+				return nil, fmt.Errorf("fitting the server's HTTPS listener: %w", err)
+			}
+			if fitRouter {
+				log.Info("its own certificates on 443 from its next start, which is now; load %s/proxy/nginx-inbuxa-stream.conf as it says, then reload nginx",
+					o.Dir)
+			}
+			existing.PassThrough, serverChanged = true, true
+		} else if snippets && !stack.PassThrough {
+			log.Info("your web server still terminates TLS for the server's names: run this again with --key to pass them through to it instead (#48)")
 		}
 		res, err := converge(ctx, o, stack, cmp, hs, serverChanged, existing, f, log)
 		if err == nil && hw != nil {
@@ -306,7 +339,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 				}
 			}
 		}
-		if err == nil && !o.Local && o.Proxy == "snippets" {
+		if err == nil && snippets {
 			// What the web server is told follows what is installed here.
 			if dir, err := compose.WriteProxySnippets(o.Dir, stack); err == nil {
 				res.ProxyConfig = dir
@@ -503,7 +536,6 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	// arrive from. That is loopback for a server on the host; for one in a
 	// container it is the project network's gateway, because a request to
 	// a published loopback port reaches the container from there.
-	snippets := !o.Local && o.Proxy == "snippets"
 	if snippets {
 		log.Step("trusting your web server's X-Forwarded-For")
 		if err := srv.TrustForwardedFor(ctx); err != nil {
@@ -521,6 +553,12 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 				return res, fmt.Errorf("exempting your web server: %w", err)
 			}
 			allowed[addr] = true
+		}
+		if stack.PassThrough {
+			log.Info("its own HTTPS on %s, for the name router in front of it", compose.PassThroughBind)
+			if err := routeByName(ctx, srv, stack, onHost); err != nil {
+				return res, fmt.Errorf("fitting the server's HTTPS listener: %w", err)
+			}
 		}
 	}
 	if stack.Webmail || stack.Proxy || snippets {
@@ -552,7 +590,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 			return res, fmt.Errorf("writing the proxy configuration: %w", err)
 		}
 		res.ProxyConfig = dir
-		log.Info("%s/nginx-inbuxa.conf and %s/Caddyfile.fragment: load one into your web server", dir, dir)
+		log.Info("%s/nginx-inbuxa.conf with %s/nginx-inbuxa-stream.conf, or %s/Caddyfile.fragment: load one into your web server", dir, dir, dir)
 		log.Info("once it is loaded, turn on the mail server's own certificates in the console (Settings › Overview, Certificates): its challenges reach it through port 80")
 	} else if !o.Local && !stack.Proxy {
 		log.Info("no proxy here, so certificates are yours to arrange: the server's own names are %s",
@@ -597,6 +635,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	if err == nil {
 		st.Machine, st.Dir, st.Domain, st.MailHost, st.Local = o.Machine, dir, o.Domain, o.MailHost, o.Local
 		st.Runtime, st.Topology = f.Runtime.Kind, o.TopologyPath
+		st.PassThrough = stack.PassThrough
 		st.Shapes = map[string]string{}
 		for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
 			if sh := o.Shape(c); sh != plan.Skip {
@@ -703,8 +742,16 @@ func converge(ctx context.Context, o plan.Options, stack compose.Stack, cmp dock
 	// The server reads the front-end URLs from its environment, so a front
 	// end that was added or removed changes what it was started with. Only
 	// restart when that actually changed.
-	if st.Shapes["console"] != string(o.Shape(plan.Console)) || st.Shapes["webmail"] != string(o.Shape(plan.Webmail)) {
-		log.Info("the front ends changed, so the server is restarted to see them")
+	//
+	// serverChanged is set for a server in a container only when its
+	// listeners were changed, which it also reads only at start.
+	frontEnds := st.Shapes["console"] != string(o.Shape(plan.Console)) || st.Shapes["webmail"] != string(o.Shape(plan.Webmail))
+	if serverChanged || frontEnds {
+		if frontEnds {
+			log.Info("the front ends changed, so the server is restarted to see them")
+		} else {
+			log.Info("restarting the server, for its new listener")
+		}
 		if err := cmp.Run(ctx, "restart", "server"); err != nil {
 			return res, err
 		}
@@ -721,6 +768,21 @@ func converge(ctx context.Context, o plan.Options, stack compose.Stack, cmp dock
 
 	saveState(st, o, f, log)
 	return res, nil
+}
+
+// routeByName fits the server's HTTPS listener to the name router in
+// nginx-inbuxa-stream.conf (#48). On the host it is on loopback, where nginx
+// reaches it. In a container it keeps its own 443, which the compose file
+// publishes on loopback, and nginx's connections arrive from the project
+// network's gateway.
+func routeByName(ctx context.Context, srv *jmap.Client, stack compose.Stack, onHost bool) error {
+	if onHost {
+		return srv.PassThroughListener(ctx, compose.PassThroughBind, []string{"127.0.0.1"})
+	}
+	if stack.GatewayIP == "" {
+		return fmt.Errorf("no gateway address for the project network %s", stack.Subnet)
+	}
+	return srv.PassThroughListener(ctx, "[::]:443", []string{stack.GatewayIP})
 }
 
 // convergeHost is converge for a server on the host: the binary, the unit
