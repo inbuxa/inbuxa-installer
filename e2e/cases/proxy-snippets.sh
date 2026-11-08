@@ -127,7 +127,14 @@ rm $DIR/proxy/nginx-inbuxa.conf $DIR/proxy/nginx-inbuxa-stream.conf
 OUT="$(INBUXA_API_KEY= /tmp/inbuxa install --domain $D --proxy snippets --yes 2>&1)"; rc=$?
 [ $rc -eq 0 ] && [ -f $DIR/proxy/nginx-inbuxa.conf ] && [ -f $DIR/proxy/nginx-inbuxa-stream.conf ] \
   && ok "a second run converges and writes both again, without a key" || { bad "second run exit $rc"; echo "$OUT" | tail -6 | sed 's/^/    /'; }
-[ "$(fp mail.$D)" = "$MAIL_FP" ] && ok "mail.$D still passes through" || bad "mail.$D after the second run"
+# The server's own certificate here is self-signed, and may be a new one by
+# now: what matters is that it is still the server's, not nginx's.
+for _ in $(seq 1 20); do AGAIN_FP=$(fp mail.$D); [ -n "$AGAIN_FP" ] && break; sleep 3; done
+if [ -n "$AGAIN_FP" ] && [ "$AGAIN_FP" != "$ADMIN_FP" ] && [ "$AGAIN_FP" != "$WEBMAIL_FP" ]; then
+  ok "mail.$D still passes through to the server$([ "$AGAIN_FP" = "$MAIL_FP" ] || echo ', with a new self-signed certificate')"
+else
+  bad "mail.$D after the second run: '${AGAIN_FP:-nothing}'"
+fi
 
 echo
 echo "==> $pass passed, $fail failed"
