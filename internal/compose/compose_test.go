@@ -236,6 +236,7 @@ func TestProxySnippetsRouteByName(t *testing.T) {
 		"listen 127.0.0.1:8444 ssl proxy_protocol;", "real_ip_header proxy_protocol;",
 		"~^(autoconfig|autodiscover|mta-sts|ua-auto-config)\\.;",
 		"location /.well-known/acme-challenge/",
+		"listen 127.0.0.1:8444 ssl proxy_protocol default_server;", "ssl_reject_handshake on;", "return 421;",
 	} {
 		if !strings.Contains(string(nginx), want) {
 			t.Errorf("nginx-inbuxa.conf lacks %q", want)
@@ -246,7 +247,7 @@ func TestProxySnippetsRouteByName(t *testing.T) {
 			t.Errorf("nginx-inbuxa.conf still has %q: the router holds 443 and the server's names are its own", bad)
 		}
 	}
-	if strings.Count(string(nginx), "listen 127.0.0.1:8444") != 2 {
+	if strings.Count(string(nginx), "listen 127.0.0.1:8444 ssl proxy_protocol;") != 2 {
 		t.Errorf("the console and the webmail are not both behind the router:\n%s", nginx)
 	}
 
@@ -276,6 +277,9 @@ func TestProxySnippetsWithoutRoutingStayAsTheyWere(t *testing.T) {
 		if !strings.Contains(string(nginx), want) {
 			t.Errorf("nginx-inbuxa.conf lacks %q", want)
 		}
+	}
+	if strings.Contains(string(nginx), "return 421;") {
+		t.Error("the fallback for the router's port is written without the router")
 	}
 	c, _ := render(t, s)
 	if strings.Contains(c, ":443\"") {

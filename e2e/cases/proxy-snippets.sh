@@ -58,6 +58,10 @@ CODE=$(via mail.$D -o /dev/null -w '%{http_code}' https://mail.$D/.well-known/jm
 case "$CODE" in 30*|200|401) ok "the mail server answers on https://mail.$D ($CODE)" ;; *) bad "https://mail.$D/.well-known/jmap answered $CODE" ;; esac
 via admin.$D https://admin.$D/ | grep -q "content=\"https://mail.$D\"" && ok "the console, pointed at https://mail.$D" || bad "the console is not served through nginx"
 via webmail.$D https://webmail.$D/api/health | grep -q '"ok":true' && ok "the webmail is healthy through nginx" || bad "the webmail is not healthy through nginx"
+# A browser reuses the webmail's connection for any name its certificate
+# covers: a request for the mail server that arrives that way is sent back.
+CODE=$(via webmail.$D -o /dev/null -w '%{http_code}' -H "Host: mail.$D" https://webmail.$D/.well-known/jmap)
+[ "$CODE" = 421 ] && ok "a request for mail.$D on the webmail's connection gets 421" || bad "a request for mail.$D on the webmail's connection answered $CODE"
 ADMIN_FP=$(openssl x509 -in /etc/ssl/inbuxa/admin.$D.fullchain.pem -noout -fingerprint -sha256)
 WEBMAIL_FP=$(openssl x509 -in /etc/ssl/inbuxa/webmail.$D.fullchain.pem -noout -fingerprint -sha256)
 [ "$(fp admin.$D)" = "$ADMIN_FP" ] && ok "the console is served with nginx's certificate" || bad "the console's certificate is not nginx's"
