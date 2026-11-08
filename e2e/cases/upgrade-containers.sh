@@ -47,7 +47,10 @@ OUT="$(/tmp/inbuxa upgrade --yes 2>&1)"; rc=$?
 echo "$OUT" | grep -v '^    |' | tail -16 | sed 's/^/    /'
 [ $rc -eq 0 ] && ok "upgraded (exit 0)" || bad "upgrade exit $rc"
 ls $DIR/backups/server-*.tar.gz >/dev/null 2>&1 && ok "the server's data was archived: $(ls $DIR/backups)" || bad "no archive in $DIR/backups"
-tar -tzf $DIR/backups/server-*.tar.gz 2>/dev/null | grep -q "config.json" && ok "with its configuration in it" || bad "the archive has no config.json"
+# The whole listing first: grep -q stops reading at the first match, and
+# under pipefail the tar it cut off would fail the check.
+LIST="$(tar -tzf $DIR/backups/server-*.tar.gz 2>/dev/null)"
+grep -q "config.json" <<<"$LIST" && ok "with its configuration in it" || bad "the archive has no config.json"
 AFTER="$(img server) $(img admin) $(img webmail)"
 [ "$AFTER" != "$BEFORE" ] && ok "now: $AFTER" || bad "the images did not change"
 STATE="$($(rt) compose -f $DIR/compose.yaml ps --format '{{.Service}} {{.State}}')"
