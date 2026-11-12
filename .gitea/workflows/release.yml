@@ -51,6 +51,21 @@ jobs:
             || { echo "$TAG is a lightweight tag; its annotation is the release notes" >&2; exit 1; }
       - run: go test -count=1 ./...
       - run: scripts/build-release.sh "$TAG" dist
+      - name: Sign SHA256SUMS with minisign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY:-}" ]; then
+            echo "MINISIGN_SECRET_KEY is not set; this release will be unsigned" >&2
+            exit 0
+          fi
+          apt-get -qq update >/dev/null && apt-get -qq install -y --no-install-recommends minisign >/dev/null
+          umask 077
+          key="$(mktemp)"; printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          minisign -S -s "$key" -m dist/SHA256SUMS -t "inbuxa $TAG"
+          rm -f "$key"
+          echo "signed dist/SHA256SUMS -> dist/SHA256SUMS.minisig"
       - name: Release on Gitea
         run: |
           set -euo pipefail
@@ -58,7 +73,7 @@ jobs:
           API="$CI_SERVER_INTERNAL/api/v1/repos/$GITHUB_REPOSITORY"
           auth=(-H "Authorization: token $TOKEN")
           notes="$(git for-each-ref "refs/tags/$TAG" --format='%(contents)' | sed -e '/^-----BEGIN [A-Z ]*SIGNATURE-----$/,$d')"  # PGP or SSH
-          notes="$notes"$'\n\n'"Static binaries for linux/amd64 and linux/arm64. Verify with SHA256SUMS."
+          notes="$notes"$'\n\n'"Static binaries for linux/amd64 and linux/arm64. Verify with SHA256SUMS (signed as SHA256SUMS.minisig; minisign public key in the README)."
           pre=false; [[ "$TAG" == *-rc.* ]] && pre=true
           created=0
           id="$(curl -fsS "${auth[@]}" "$API/releases/tags/$TAG" 2>/dev/null | jq -r '.id // empty' || true)"
@@ -70,7 +85,8 @@ jobs:
             created=1
           fi
           have="$(curl -fsS "${auth[@]}" "$API/releases/$id/assets" | jq -r '.[].name')"
-          for f in dist/inbuxa-linux-amd64 dist/inbuxa-linux-arm64 dist/SHA256SUMS; do
+          for f in dist/inbuxa-linux-amd64 dist/inbuxa-linux-arm64 dist/SHA256SUMS dist/SHA256SUMS.minisig; do
+            [ -e "$f" ] || continue   # .minisig is absent only on an unsigned release
             n="$(basename "$f")"
             if grep -qxF "$n" <<<"$have"; then echo "already attached: $n"; continue; fi
             echo "uploading $n"
