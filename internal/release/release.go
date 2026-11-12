@@ -12,6 +12,11 @@
 // candidates; a final release pins final releases only. Downloading an RC
 // installer is the opt-in: it is published as a pre-release, so
 // releases/latest, and so a plain install, never reaches one.
+//
+// A pin left behind is a fresh install shipped stale. The pin-check command
+// (cmd/pin-check, run weekly by .gitea/workflows/pin-check.yml) reads each
+// component's releases and reports when the version here is behind the newest
+// in its channel, so the move is noticed and made before it ships.
 package release
 
 import (
