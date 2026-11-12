@@ -67,6 +67,9 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa cluster doctor [flags]
                              whether this node can reach a cluster's data
                              layer (PostgreSQL, NATS, etcd, Patroni, S3)
+  inbuxa cluster join -f FILE
+                             point this node's server at the shared store in
+                             the file's cluster block and give it its role
   inbuxa version             this program's version
 
 install flags:
@@ -143,6 +146,15 @@ checked, so it fits any deployment; omit them all and it does nothing):
   --patroni HOST:PORT        Patroni, checked at /primary (200 = the leader)
   --s3 HOST:PORT             the S3 blob store, checked at /health
   --timeout DURATION         how long each probe waits; default 5s
+
+cluster join flags:
+  -f FILE                    the version 2 topology file; this machine's
+                             cluster block says where its store, coordinator
+                             and blob store are and what role it takes
+  --machine NAME             which machine in the file this is; default: the
+                             hostname
+  --dry-run                  print what it would write and stop
+  --yes                      do not ask for confirmation
 
 deps flags:
   --server/--console/--webmail SHAPE   the shapes to work out the needs for
@@ -1060,18 +1072,119 @@ func relayCmd(args []string) int {
 
 func clusterCmd(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, "inbuxa cluster doctor [flags]\n\n"+usage)
+		fmt.Fprint(os.Stderr, "inbuxa cluster doctor|join [flags]\n\n"+usage)
 		return 2
 	}
 	switch args[0] {
 	case "doctor":
 		return clusterDoctor(args[1:])
+	case "join":
+		return clusterJoin(args[1:])
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return 0
 	}
-	fmt.Fprintf(os.Stderr, "unknown cluster command %q: doctor\n", args[0])
+	fmt.Fprintf(os.Stderr, "unknown cluster command %q: doctor, join\n", args[0])
 	return 2
+}
+
+// clusterJoin points this node's server at the shared store named in the
+// topology file's cluster block for this machine, places the secrets every
+// node reads from disk, gives the node its role and boot order, and restarts
+// it. It never reaches another machine: the file is copied across and run on
+// each node, as the rest of the installer works. The registry that names the
+// blob store and coordinator is set up once for the cluster, not here.
+func clusterJoin(args []string) int {
+	fs := flag.NewFlagSet("cluster join", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	var (
+		file        = fs.String("f", "", "")
+		machineName = fs.String("machine", "", "")
+		dryRun      = fs.Bool("dry-run", false, "")
+		yes         = fs.Bool("yes", false, "")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *file == "" {
+		fmt.Fprintln(os.Stderr, "which file? pass -f topology.json")
+		return 2
+	}
+	t, err := topology.Load(*file)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	name := *machineName
+	if name == "" {
+		name, _ = os.Hostname()
+	}
+	m, ok := t.Machine(name)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "this machine is %q, which the file does not mention.\n", name)
+		fmt.Fprintf(os.Stderr, "It describes: %s\n", strings.Join(machineNames(t), ", "))
+		fmt.Fprintln(os.Stderr, "Pass --machine to say which one this is.")
+		return 1
+	}
+	if !m.Clustered() {
+		fmt.Fprintf(os.Stderr, "machine %q has no cluster block in this file; there is nothing to join.\n", name)
+		return 1
+	}
+	if m.Shape("server") != "host" {
+		fmt.Fprintf(os.Stderr, "a cluster node runs the mail server on the host; machine %q runs it as %q.\n", name, m.Shape("server"))
+		return 1
+	}
+
+	etc := filepath.Join(m.Dir, "server")
+	cfg := cluster.Config{
+		Node:    *m.Cluster,
+		Machine: name,
+		EtcDir:  etc,
+		Unit:    apply.HostServerUnit,
+		UnitDir: filepath.Dir(discover.HostServerUnitPath),
+		User:    apply.HostServerUser,
+		DryRun:  *dryRun,
+		Log:     func(format string, a ...any) { fmt.Printf("  "+format+"\n", a...) },
+	}
+	p, err := cluster.BuildPlan(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	fmt.Print(p.String())
+
+	if *dryRun {
+		return 0
+	}
+	if !*yes {
+		fmt.Fprintln(os.Stderr, "\nNothing has happened yet. Pass --yes to carry this out, or --dry-run to see the files.")
+		return 1
+	}
+	if os.Geteuid() != 0 {
+		fmt.Fprintln(os.Stderr, "\nthis writes under the server's directory and /etc/systemd: run it as root")
+		return 1
+	}
+
+	fmt.Println("\nJoining:")
+	if err := cluster.Apply(context.Background(), p); err != nil {
+		fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
+		return 1
+	}
+	if st, err := state.Load(); err == nil {
+		st.Clustered, st.ClusterRole = true, m.Cluster.Role
+		if err := st.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "could not record cluster membership in %s: %v\n", state.Path, err)
+		}
+	}
+	fmt.Printf("\nDone. %s is in the cluster as %s.\n", cfg.Machine, roleWordCLI(m.Cluster.Role))
+	return 0
+}
+
+func roleWordCLI(role string) string {
+	if role == "" {
+		return "the node that carries every task (no role)"
+	}
+	return "role " + role
 }
 
 // clusterDoctor probes the data-layer endpoints the operator names, so a node
