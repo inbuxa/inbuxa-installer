@@ -20,6 +20,8 @@ func TestUpgradeTakesOptionsAfterComponents(t *testing.T) {
 		{"server", "--no-backup", "--dry-run"},
 		{"--dry-run", "server", "console"},
 		{"webmail", "--dry-run", "--no-backup"},
+		{"--check"},
+		{"server", "--check"},
 	} {
 		if code := upgradeCmd(args); code == 2 {
 			t.Errorf("upgrade %v: taken as a usage error", args)
