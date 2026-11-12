@@ -54,7 +54,8 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa status              what is installed here, and whether it agrees
   inbuxa upgrade [component…]  move what is here to the releases this
                              installer installs: --dry-run, --yes,
-                             --no-backup
+                             --no-backup, --check (report only; exit 10 if
+                             anything can be upgraded)
   inbuxa uninstall           take the programs away, keep the data:
                              --dry-run, --yes, --purge (the data too)
   inbuxa certs [--key KEY]   the mail server's certificate: what its mail
@@ -777,6 +778,7 @@ func upgradeCmd(args []string) int {
 	dryRun := fs.Bool("dry-run", false, "")
 	yes := fs.Bool("yes", false, "")
 	noBackup := fs.Bool("no-backup", false, "")
+	check := fs.Bool("check", false, "")
 	// Components and options in any order: `upgrade server --yes` as well as
 	// `upgrade --yes server`. The flag package stops at the first argument
 	// that isn't an option, so parse again after each one.
@@ -828,6 +830,13 @@ func upgradeCmd(args []string) int {
 	if due == 0 {
 		fmt.Println("\nNothing to do: this is what this installer installs. A newer installer brings newer releases.")
 		return 0
+	}
+	// --check reports and stops, with an exit code a script or a cron job can
+	// act on: 10 when something can be upgraded, 0 when nothing can. It never
+	// changes anything, so it needs neither --yes nor root.
+	if *check {
+		fmt.Printf("\n%d component(s) can be upgraded. Run `inbuxa upgrade` to apply.\n", due)
+		return 10
 	}
 	backup := !*noBackup
 	for _, s := range steps {
