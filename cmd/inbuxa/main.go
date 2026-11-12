@@ -21,9 +21,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/apply"
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/cluster"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/deps"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/discover"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
@@ -62,6 +64,9 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa relay install|status|uninstall
                              inbuxa Relay, on a machine of its own in front
                              of the server
+  inbuxa cluster doctor [flags]
+                             whether this node can reach a cluster's data
+                             layer (PostgreSQL, NATS, etcd, Patroni, S3)
   inbuxa version             this program's version
 
 install flags:
@@ -130,6 +135,15 @@ relay uninstall flags:
   --discard-held             with --purge, even while it holds mail
   --dry-run, --yes           as for install
 
+cluster doctor flags (each endpoint is HOST:PORT; only the ones given are
+checked, so it fits any deployment; omit them all and it does nothing):
+  --pg HOST:PORT             the PostgreSQL store (often an HAProxy listener)
+  --nats HOST:PORT           the NATS coordinator
+  --etcd HOST:PORT           etcd, checked at http://HOST:PORT/health
+  --patroni HOST:PORT        Patroni, checked at /primary (200 = the leader)
+  --s3 HOST:PORT             the S3 blob store, checked at /health
+  --timeout DURATION         how long each probe waits; default 5s
+
 deps flags:
   --server/--console/--webmail SHAPE   the shapes to work out the needs for
   --install                  do it, rather than only saying what it would do
@@ -178,6 +192,8 @@ func main() {
 		os.Exit(certsCmd(os.Args[2:]))
 	case "relay":
 		os.Exit(relayCmd(os.Args[2:]))
+	case "cluster":
+		os.Exit(clusterCmd(os.Args[2:]))
 	case "version":
 		fmt.Println(version)
 	case "-h", "--help", "help":
@@ -1040,6 +1056,77 @@ func relayCmd(args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "unknown relay command %q: install, status or uninstall\n", args[0])
 	return 2
+}
+
+func clusterCmd(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, "inbuxa cluster doctor [flags]\n\n"+usage)
+		return 2
+	}
+	switch args[0] {
+	case "doctor":
+		return clusterDoctor(args[1:])
+	case "-h", "--help", "help":
+		fmt.Print(usage)
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "unknown cluster command %q: doctor\n", args[0])
+	return 2
+}
+
+// clusterDoctor probes the data-layer endpoints the operator names, so a node
+// can be checked before it is pointed at a cluster. It touches nothing.
+func clusterDoctor(args []string) int {
+	fs := flag.NewFlagSet("cluster doctor", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	var (
+		pg      = fs.String("pg", "", "")
+		nats    = fs.String("nats", "", "")
+		etcd    = fs.String("etcd", "", "")
+		patroni = fs.String("patroni", "", "")
+		s3      = fs.String("s3", "", "")
+		timeout = fs.Duration("timeout", 5*time.Second, "")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "unexpected %q: cluster doctor takes only flags\n", fs.Arg(0))
+		return 2
+	}
+
+	var targets []cluster.Target
+	add := func(addr string, t cluster.Target) {
+		if addr != "" {
+			targets = append(targets, t)
+		}
+	}
+	add(*pg, cluster.Target{Name: "PostgreSQL", Kind: cluster.TCP, Addr: *pg})
+	add(*nats, cluster.Target{Name: "NATS", Kind: cluster.NATS, Addr: *nats})
+	add(*etcd, cluster.Target{Name: "etcd", Kind: cluster.HTTP, Addr: "http://" + *etcd + "/health"})
+	add(*patroni, cluster.Target{Name: "Patroni leader", Kind: cluster.HTTP, Addr: "http://" + *patroni + "/primary", HealthyStatus: 200})
+	add(*s3, cluster.Target{Name: "S3 blobs", Kind: cluster.HTTP, Addr: "http://" + *s3 + "/health"})
+
+	if len(targets) == 0 {
+		fmt.Fprintln(os.Stderr, "nothing to check: name an endpoint, such as --pg HOST:PORT (inbuxa cluster doctor -h)")
+		return 2
+	}
+
+	checks := cluster.Doctor(context.Background(), targets, *timeout)
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	for _, c := range checks {
+		mark := "ok"
+		if !c.OK {
+			mark = "unreachable"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", c.Name, c.Addr, mark, c.Detail)
+	}
+	w.Flush()
+	if !cluster.AllOK(checks) {
+		fmt.Fprintln(os.Stderr, "\nsome endpoints didn't answer; a node can't join until they do")
+		return 1
+	}
+	return 0
 }
 
 func relayInstall(ctx context.Context, args []string) int {
