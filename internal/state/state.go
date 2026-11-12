@@ -43,6 +43,12 @@ type State struct {
 	// before it are moved over by a run with --key.
 	PassThrough bool `json:"passThrough,omitempty"`
 
+	// Clustered is whether `inbuxa cluster join` pointed this node's server at
+	// a shared store; ClusterRole is the role it was given, empty for the node
+	// that carries every task.
+	Clustered   bool   `json:"clustered,omitempty"`
+	ClusterRole string `json:"clusterRole,omitempty"`
+
 	// RemovedAt is when `inbuxa uninstall` took the programs away and kept
 	// the data. The shapes stay, so `install` run again picks the data up
 	// rather than trying a first boot on a server configured long ago.
