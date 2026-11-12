@@ -34,3 +34,24 @@ func TestUpgradeTakesOptionsAfterComponents(t *testing.T) {
 		t.Errorf("an unknown component was accepted: %d", code)
 	}
 }
+
+// dns understands its flags: a bad one is a usage error, the good ones are
+// not. With nothing installed it stops before touching the server, so what is
+// checked is that the options parsed, not what they would have done.
+func TestDNSTakesItsFlags(t *testing.T) {
+	if _, err := os.Stat(filepath.Join("/etc/inbuxa", "install.json")); err == nil {
+		t.Skip("an install is recorded on this machine")
+	}
+	for _, args := range [][]string{
+		nil,
+		{"--refresh", "--domain", "example.org"},
+		{"--refresh", "--key", ""},
+	} {
+		if code := dnsCmd(args); code == 2 {
+			t.Errorf("dns %v: taken as a usage error", args)
+		}
+	}
+	if code := dnsCmd([]string{"--bogus"}); code != 2 {
+		t.Errorf("an unknown option was accepted: %d", code)
+	}
+}
