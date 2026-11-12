@@ -61,6 +61,9 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa certs [--key KEY]   the mail server's certificate: what its mail
                              ports present, and with an API key a new
                              order when it needs one
+  inbuxa dns                 the DNS records the domain needs: the saved
+                             dns.zone, or --refresh --key - to re-read them
+                             live from the server
   inbuxa export [-o FILE]    write a topology file from what is here
   inbuxa relay install|status|uninstall
                              inbuxa Relay, on a machine of its own in front
@@ -124,6 +127,14 @@ certs flags:
   --email ADDRESS            the ACME contact, if ACME is turned on here;
                              default: postmaster@DOMAIN
   --dry-run                  report, and say what it would do
+
+dns flags:
+  --refresh                  read the records live from the server instead of
+                             the saved dns.zone; needs an API key
+  --key KEY                  an API key made in the console, needed only with
+                             --refresh; "-" reads it from standard input, and
+                             INBUXA_API_KEY works too
+  --domain NAME              the mail domain, if the install didn't record it
 
 relay install flags:
   --token TOKEN              the join token the console shows when you add
@@ -203,6 +214,8 @@ func main() {
 		os.Exit(uninstallCmd(os.Args[2:]))
 	case "certs":
 		os.Exit(certsCmd(os.Args[2:]))
+	case "dns":
+		os.Exit(dnsCmd(os.Args[2:]))
 	case "relay":
 		os.Exit(relayCmd(os.Args[2:]))
 	case "cluster":
@@ -1045,6 +1058,99 @@ func certsCmd(args []string) int {
 	if s != nil {
 		fmt.Printf("\nDone: port %s now presents a certificate for %s from %s, valid until %s.\n",
 			s.Port, o.MailHost, s.Issuer, s.NotAfter.Format("2006-01-02"))
+	}
+	return 0
+}
+
+// dnsCmd prints the DNS records the domain needs published. By default it
+// reads the dns.zone the install wrote, which needs nothing; --refresh asks
+// the running server for them live, with an API key, so a rotated DKIM key or
+// a record that changed since the install shows up.
+func dnsCmd(args []string) int {
+	fs := flag.NewFlagSet("dns", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	var (
+		refresh = fs.Bool("refresh", false, "")
+		key     = fs.String("key", os.Getenv("INBUXA_API_KEY"), "")
+		domain  = fs.String("domain", "", "")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	ctx := context.Background()
+	st, err := state.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	if _, ok := st.Shapes["server"]; !ok || st.Removed() {
+		fmt.Println("The mail server isn't installed on this machine, so its DNS records are shown where it runs.")
+		return 0
+	}
+	if apply.LocalInstall(st) {
+		fmt.Println("This is a --local install: the mail ports are on loopback and no DNS is needed. A real")
+		fmt.Println("install for a domain that points here writes the records it needs to dns.zone.")
+		return 0
+	}
+	dom := *domain
+	if dom == "" {
+		dom = st.Domain
+	}
+	zoneFile := filepath.Join(st.Dir, "dns.zone")
+
+	// The saved file is the no-friction default: the install wrote it, it
+	// needs no key, and for most domains it never goes stale.
+	if !*refresh {
+		b, err := os.ReadFile(zoneFile)
+		if err == nil {
+			fmt.Printf("The records %s needs published, from %s:\n\n", dom, zoneFile)
+			os.Stdout.Write(b)
+			if len(b) > 0 && b[len(b)-1] != '\n' {
+				fmt.Println()
+			}
+			fmt.Println("\nTo re-read them live from the server (a rotated DKIM key, say):")
+			fmt.Println("  inbuxa dns --refresh --key -")
+			return 0
+		}
+		if !os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, "reading "+zoneFile+": "+err.Error())
+			return 1
+		}
+		fmt.Printf("No saved records at %s. Reading them live from the server instead.\n\n", zoneFile)
+	}
+
+	if *key == "-" {
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil && line == "" {
+			fmt.Fprintln(os.Stderr, "reading the key from standard input: "+err.Error())
+			return 2
+		}
+		*key = strings.TrimSpace(line)
+	}
+	if *key == "" {
+		fmt.Println("Reading the records live needs an API key: make one in the console (your account, API")
+		fmt.Println("keys), then")
+		fmt.Println("  inbuxa dns --refresh --key -")
+		fmt.Println("and paste it, or set INBUXA_API_KEY. It isn't kept.")
+		return 1
+	}
+	zone, err := apply.FetchDNSZone(ctx, st, dom, *key)
+	if err != nil {
+		if errors.Is(err, apply.ErrKeyRefused) {
+			fmt.Fprintln(os.Stderr, "the server didn't take that API key")
+			return 1
+		}
+		fmt.Fprintln(os.Stderr, "stopped: "+err.Error())
+		return 1
+	}
+	fmt.Printf("The records %s needs published, read live from the server:\n\n", dom)
+	fmt.Print(zone)
+	if len(zone) > 0 && zone[len(zone)-1] != '\n' {
+		fmt.Println()
+	}
+	// Keep the saved copy in step with what the server now says.
+	if err := os.WriteFile(zoneFile, []byte(zone), 0o644); err == nil {
+		fmt.Printf("\n(also written to %s)\n", zoneFile)
 	}
 	return 0
 }

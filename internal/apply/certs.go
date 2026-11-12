@@ -286,6 +286,31 @@ func Renew(ctx context.Context, st *state.State, o CertsOptions, log Log) (*Serv
 	}
 }
 
+// FetchDNSZone asks the running server, on loopback, for the records the
+// domain needs published right now -- the same zone fragment the install
+// wrote to dns.zone, but re-read live, so it reflects the current DKIM key
+// and any records that changed since. It needs an API key, as Renew does,
+// because the server takes no password on its API once it is set up.
+func FetchDNSZone(ctx context.Context, st *state.State, domain, key string) (string, error) {
+	if domain == "" {
+		return "", errors.New("no domain: this install didn't record one, so pass --domain")
+	}
+	srv := &jmap.Client{BaseURL: "http://" + hostFinalBind, Token: key}
+	domainID, err := srv.DomainID(ctx, domain)
+	if err != nil {
+		var he *jmap.HTTPError
+		if errors.As(err, &he) && (he.Status == 401 || he.Status == 403) {
+			return "", ErrKeyRefused
+		}
+		return "", fmt.Errorf("finding %s on the server: %w", domain, err)
+	}
+	zone, err := srv.DNSZone(ctx, domainID)
+	if err != nil {
+		return "", err
+	}
+	return zone, nil
+}
+
 // CertsLogHint is where the server says why an order failed.
 func CertsLogHint(st *state.State) string {
 	if st.Shapes["server"] == "host" {
