@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 Coffey Labs LLC
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Weekly check that the releases this installer pins (internal/release) have
+# not fallen behind the newest release of inbuxa-server, inbuxa-admin and
+# inbuxa-webmail. A fresh install ships whatever release.go names, so a pin
+# left behind is a fresh install shipped stale -- and, if the skipped release
+# fixed a vulnerability, shipped vulnerable.
+#
+# A stale pin fails this run (exit 10) and opens or updates a tracking issue;
+# the fix is a reviewed change to release.go with the new checksums, never an
+# automatic edit. The release reads are public, so they need no token; --issue
+# uses the run token to write the issue in this repository.
+name: pin-check
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  pins:
+    runs-on: light
+    container:
+      image: golang:1.26-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0 # 1.26-bookworm (1.26.11)
+    steps:
+      - uses: coffey-labs/actions/checkout@fab0c4d45e0162963965f1555df27b7bed5e20ec
+      - name: Check the release pins
+        env:
+          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: go run ./cmd/pin-check --issue
