@@ -28,6 +28,7 @@ import (
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/cluster"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/deps"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/discover"
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/doctor"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/host"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/plan"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/relay"
@@ -52,6 +53,9 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa plan -f FILE        what a topology file would change here
   inbuxa apply -f FILE       make this machine match that file
   inbuxa status              what is installed here, and whether it agrees
+  inbuxa doctor              a read-only health check: services, the mail
+                             server's certificate, the ports answering, and
+                             the DNS a sender needs (exit 1 on a failure)
   inbuxa upgrade [component…]  move what is here to the releases this
                              installer installs: --dry-run, --yes,
                              --no-backup, --check (report only; exit 10 if
@@ -208,6 +212,8 @@ func main() {
 		os.Exit(exportCmd(os.Args[2:]))
 	case "status":
 		os.Exit(statusCmd())
+	case "doctor":
+		os.Exit(doctorCmd(os.Args[2:]))
 	case "upgrade":
 		os.Exit(upgradeCmd(os.Args[2:]))
 	case "uninstall":
@@ -1555,6 +1561,142 @@ func statusCmd() int {
 		return 1
 	}
 	return 0
+}
+
+// doctorCmd is a one-shot, read-only health check of the install on this
+// machine: the services that should run, the certificate the mail ports
+// present, those ports answering, and the DNS a sender needs. It changes
+// nothing, and exits 1 only when something has failed -- a warning, such as
+// DNS that has not spread yet, does not fail it.
+func doctorCmd(args []string) int {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	timeout := fs.Duration("timeout", 5*time.Second, "")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	ctx := context.Background()
+	st, err := state.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	f := host.Survey(ctx)
+	found := discover.Run(ctx, f, st.Dir)
+	if !st.Installed() && found.Dir == "" {
+		fmt.Println("Nothing is installed on this machine; there is nothing to check.")
+		return 0
+	}
+	if st.Removed() {
+		fmt.Println("The programs were uninstalled here and the data kept; there is nothing running to check.")
+		return 0
+	}
+
+	var r doctor.Report
+	for _, c := range doctor.ServiceChecks(st.Shapes, found.Services) {
+		r.Add(c)
+	}
+
+	_, serverHere := st.Shapes["server"]
+	mailHost := apply.CertsMailHost("", st, found.MailHost)
+	local := apply.LocalInstall(st)
+
+	if serverHere {
+		// The certificate the mail ports present, unless this is --local.
+		var problem string
+		var perr error
+		if !local {
+			s, err := apply.ReadServed(ctx, mailHost, apply.CertRoots(st.Dir))
+			if err != nil {
+				perr = err
+			} else {
+				problem = s.Problem(mailHost, time.Now())
+			}
+		}
+		r.Add(doctor.CertCheck(local, perr, problem))
+
+		// The ports the server should answer on, dialed on loopback.
+		ports := []struct {
+			n    int
+			for_ string
+		}{
+			{25, "SMTP, mail from other servers"},
+			{465, "submissions, apps sending"},
+			{993, "IMAPS, apps reading"},
+			{443, "HTTPS, the front ends and JMAP"},
+		}
+		var probes []doctor.PortProbe
+		for _, p := range ports {
+			pr := doctor.PortProbe{Port: p.n, For: p.for_}
+			conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", p.n), *timeout)
+			if err == nil {
+				pr.Open = true
+				conn.Close()
+			}
+			probes = append(probes, pr)
+		}
+		for _, c := range doctor.PortChecks(probes) {
+			r.Add(c)
+		}
+	}
+
+	// The DNS a sending server needs, for a public install that runs the
+	// server here.
+	df := doctor.DNSFacts{MailHost: mailHost}
+	domain := st.Domain
+	if domain == "" {
+		domain = found.Domain
+	}
+	if serverHere && !local && domain != "" {
+		df.Domain = domain
+		if mxs, err := net.DefaultResolver.LookupMX(ctx, domain); err != nil {
+			df.MXErr = resolverReason(err)
+		} else {
+			for _, mx := range mxs {
+				df.MX = append(df.MX, strings.TrimSuffix(mx.Host, "."))
+			}
+		}
+		if addrs, err := net.DefaultResolver.LookupHost(ctx, mailHost); err != nil {
+			df.HostErr = resolverReason(err)
+		} else {
+			df.HostAddrs = addrs
+		}
+	}
+	for _, c := range doctor.DNSChecks(df) {
+		r.Add(c)
+	}
+
+	printDoctorReport(r)
+	return r.ExitCode()
+}
+
+// resolverReason trims a resolver error to its reason, dropping the "lookup
+// name on server:" preamble a *net.DNSError carries.
+func resolverReason(err error) string {
+	var d *net.DNSError
+	if errors.As(err, &d) {
+		return d.Err
+	}
+	return err.Error()
+}
+
+// printDoctorReport prints each check, then one line on the whole.
+func printDoctorReport(r doctor.Report) {
+	mark := map[doctor.Level]string{
+		doctor.OK: "ok  ", doctor.Warn: "warn", doctor.Fail: "FAIL", doctor.Skipped: "--  ",
+	}
+	for _, c := range r.Checks {
+		fmt.Printf("  [%s] %-16s %s\n", mark[c.Level], c.Name, c.Detail)
+	}
+	switch r.Worst() {
+	case doctor.Fail:
+		fmt.Println("\nSomething above is wrong. `inbuxa status` shows what is installed, `inbuxa certs`")
+		fmt.Println("looks after the certificate, and `inbuxa dns` prints the records the domain needs.")
+	case doctor.Warn:
+		fmt.Println("\nUp and running. The warnings above are worth a look -- DNS often just needs time.")
+	default:
+		fmt.Println("\nEverything checks out.")
+	}
 }
 
 func machineNames(t *topology.Topology) []string {
