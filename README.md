@@ -242,6 +242,22 @@ candidate (before 27.1 the tags were dated, `v2026.10.15.2`).
 builds the same thing locally. A release candidate is published as a
 pre-release, so `releases/latest` stays on the last final release.
 
+## Shell completions and a man page
+
+The binary writes its own, so there is nothing extra to download. For
+completion of the commands, flags and their values:
+
+    inbuxa completions bash | sudo tee /etc/bash_completion.d/inbuxa >/dev/null
+    inbuxa completions zsh  > "${fpath[1]}/_inbuxa"      # a directory on your $fpath
+    inbuxa completions fish > ~/.config/fish/completions/inbuxa.fish
+
+For the manual page:
+
+    inbuxa man | sudo tee /usr/share/man/man1/inbuxa.1 >/dev/null
+    man inbuxa
+
+Both are generated from the command list, so they match the binary you have.
+
 ## Building and testing
 
     go build ./cmd/inbuxa
