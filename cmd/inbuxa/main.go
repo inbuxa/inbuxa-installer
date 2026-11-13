@@ -56,6 +56,9 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa doctor              a read-only health check: services, the mail
                              server's certificate, the ports answering, and
                              the DNS a sender needs (exit 1 on a failure)
+  inbuxa backup [--yes]      archive this machine's mail server, its
+                             configuration and data, to <dir>/backups; it is
+                             briefly stopped, so without --yes it only says so
   inbuxa upgrade [component…]  move what is here to the releases this
                              installer installs: --dry-run, --yes,
                              --no-backup, --check (report only; exit 10 if
@@ -218,6 +221,8 @@ func main() {
 		os.Exit(statusCmd())
 	case "doctor":
 		os.Exit(doctorCmd(os.Args[2:]))
+	case "backup":
+		os.Exit(backupCmd(os.Args[2:]))
 	case "upgrade":
 		os.Exit(upgradeCmd(os.Args[2:]))
 	case "uninstall":
@@ -1780,6 +1785,44 @@ func printDoctorReport(r doctor.Report) {
 	default:
 		fmt.Println("\nEverything checks out.")
 	}
+}
+
+// backupCmd archives this machine's mail server. It stops the server, which
+// is a brief outage, so without --yes it only says what it would do and why,
+// and stops. apply.BackupKind decides whether there is anything here to back
+// up, and refuses on a clustered node, whose real store lives elsewhere.
+func backupCmd(args []string) int {
+	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
+	fs.Usage = func() { fmt.Print(usage) }
+	yes := fs.Bool("yes", false, "")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	ctx := context.Background()
+	st, err := state.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	if _, refuse := apply.BackupKind(st); refuse != "" {
+		fmt.Println(refuse)
+		return 1
+	}
+	where := filepath.Join(st.Dir, "backups")
+	if !*yes {
+		fmt.Printf("This briefly stops the mail server, archives its configuration and data under\n")
+		fmt.Printf("%s, and starts it again. Mail is not lost while it is stopped --\n", where)
+		fmt.Printf("other servers retry -- but it is unreachable for those few seconds.\n\n")
+		fmt.Println("Re-run with --yes to take the backup.")
+		return 1
+	}
+	name, err := apply.Backup(ctx, st, host.Survey(ctx), &printer{})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return 1
+	}
+	fmt.Printf("Backed up to %s\n", name)
+	return 0
 }
 
 func machineNames(t *topology.Topology) []string {
