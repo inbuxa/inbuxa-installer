@@ -82,6 +82,14 @@ This is early. What is built:
   rest up without it, exempts the front ends from the auto-ban, creates the
   first mailbox, writes `credentials.txt` and `dns.zone`, and then checks
   that all three answer.
+- **`install --answers FILE`** -- the install options from a JSON file, for
+  an unattended install driven by cloud-init, Ansible or a kickstart rather
+  than a long command line. The keys are the flag names (`domain`,
+  `mail-host`, `server`, `console`, `webmail`, `proxy`, `local`, and the
+  rest); a mistyped key is refused rather than ignored. A flag given on the
+  command line still wins over the file, so one answers file can be a base
+  that a flag overrides. It carries no secrets -- the API key stays on
+  `--key`/`INBUXA_API_KEY` -- and still needs `--yes` to carry the plan out.
 - **`install --server host`** -- the same, with the mail server as the
   release binary under systemd instead of a container, checked against a
   checksum in the source. It gets a user of its own, its configuration and
@@ -195,6 +203,17 @@ DNS and no certificates, on a machine that starts with nothing. Without
 `--local` it takes the real ports, puts Caddy in front and obtains
 certificates -- which `e2e/cases/install-public.sh` proves against a private
 CA, with no internet and no public name involved.
+
+For an unattended install, put the options in a file and point `--answers` at
+it:
+
+    cat > answers.json <<'JSON'
+    { "domain": "example.com", "email": "postmaster@example.com", "proxy": "caddy" }
+    JSON
+    inbuxa install --answers answers.json --yes
+
+A flag still wins over the file (`--answers answers.json --server host`), so
+one file can be a base a flag overrides.
 
 ## Download
 

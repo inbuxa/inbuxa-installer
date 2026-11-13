@@ -104,6 +104,10 @@ install flags:
                              nginx passed the server's names through to it;
                              "-" reads it from standard input, and
                              INBUXA_API_KEY works too
+  --answers FILE             read these options from a JSON file, for an
+                             unattended install (cloud-init, Ansible); keys
+                             are the flag names, and a flag given here still
+                             wins over the file
   --dry-run                  print the plan and stop
   --yes                      do not ask for confirmation
 
@@ -242,6 +246,69 @@ func survey() int {
 	return 0
 }
 
+// answersFile carries install options from a file, for an unattended install
+// driven by cloud-init, Ansible or a kickstart rather than a long command
+// line. Its keys are the install flags. Every field is a pointer, so a key
+// left out keeps the default and an explicit `"local": false` is told apart
+// from an absent one. A command-line flag always overrides the file.
+type answersFile struct {
+	Domain        *string `json:"domain"`
+	MailHost      *string `json:"mail-host"`
+	ConsoleHost   *string `json:"console-host"`
+	WebmailHost   *string `json:"webmail-host"`
+	Email         *string `json:"email"`
+	Proxy         *string `json:"proxy"`
+	Dir           *string `json:"dir"`
+	Local         *bool   `json:"local"`
+	InstallDeps   *bool   `json:"install-deps"`
+	ACMEDirectory *string `json:"acme-directory"`
+	ACMECARoot    *string `json:"acme-ca-root"`
+	Server        *string `json:"server"`
+	Console       *string `json:"console"`
+	Webmail       *string `json:"webmail"`
+}
+
+// parseAnswers reads an answers file as JSON, rejecting unknown keys so a
+// mistyped field name is caught rather than quietly ignored.
+func parseAnswers(b []byte) (answersFile, error) {
+	var a answersFile
+	dec := json.NewDecoder(strings.NewReader(string(b)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&a); err != nil {
+		return answersFile{}, err
+	}
+	return a, nil
+}
+
+// applyAnswers fills the options the command line did not set (those are in
+// set) from the answers file; a flag given on the command line always wins.
+func applyAnswers(a answersFile, set map[string]bool, o *plan.Options, server, console, webmail *string) {
+	str := func(name string, dst, v *string) {
+		if v != nil && !set[name] {
+			*dst = *v
+		}
+	}
+	boolean := func(name string, dst, v *bool) {
+		if v != nil && !set[name] {
+			*dst = *v
+		}
+	}
+	str("domain", &o.Domain, a.Domain)
+	str("mail-host", &o.MailHost, a.MailHost)
+	str("console-host", &o.ConsoleHost, a.ConsoleHost)
+	str("webmail-host", &o.WebmailHost, a.WebmailHost)
+	str("email", &o.ACMEEmail, a.Email)
+	str("proxy", &o.Proxy, a.Proxy)
+	str("dir", &o.Dir, a.Dir)
+	str("acme-directory", &o.ACMEDirectory, a.ACMEDirectory)
+	str("acme-ca-root", &o.ACMECARoot, a.ACMECARoot)
+	str("server", server, a.Server)
+	str("console", console, a.Console)
+	str("webmail", webmail, a.Webmail)
+	boolean("local", &o.Local, a.Local)
+	boolean("install-deps", &o.InstallDeps, a.InstallDeps)
+}
+
 func install(args []string) int {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Print(usage) }
@@ -253,6 +320,7 @@ func install(args []string) int {
 		dryRun  = fs.Bool("dry-run", false, "")
 		yes     = fs.Bool("yes", false, "")
 		key     = fs.String("key", os.Getenv("INBUXA_API_KEY"), "")
+		answers = fs.String("answers", "", "")
 	)
 	fs.StringVar(&o.Domain, "domain", "", "")
 	fs.StringVar(&o.MailHost, "mail-host", "", "")
@@ -267,6 +335,21 @@ func install(args []string) int {
 	fs.StringVar(&o.ACMECARoot, "acme-ca-root", "", "")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *answers != "" {
+		set := map[string]bool{}
+		fs.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
+		b, err := os.ReadFile(*answers)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "reading --answers: "+err.Error())
+			return 2
+		}
+		a, err := parseAnswers(b)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "--answers %s: %v\n", *answers, err)
+			return 2
+		}
+		applyAnswers(a, set, &o, server, console, webmail)
 	}
 	for _, c := range []struct {
 		comp plan.Component
