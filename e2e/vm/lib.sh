@@ -93,3 +93,33 @@ vm_scp() {
   scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
       -o LogLevel=ERROR -P "$SSH_PORT" "$@"
 }
+
+# ---- the SELinux tier ----
+#
+# On the Red Hat family the installer runs under SELinux enforcing, and SELinux
+# has stopped it before (a container could not read a directory mounted into
+# it; see internal/apply/upgrade.go). These let run.sh turn any case on Fedora
+# or Rocky into a check that the installer provoked no SELinux denial. They run
+# in the guest, where the audit log is, and report nothing anywhere SELinux is
+# not enforcing, so they are harmless on Debian, Ubuntu and Arch.
+
+# vm_selinux_enforcing is true only where the guest has SELinux in enforcing
+# mode. getenforce is in /sbin, which a non-login shell may not have on PATH,
+# so this goes through sudo, whose secure_path does.
+vm_selinux_enforcing() {
+  [ "$(vm_ssh 'sudo getenforce 2>/dev/null || echo Disabled')" = Enforcing ]
+}
+
+# vm_audit_checkpoint prints a time to hand back to vm_selinux_denials, so a
+# scan sees only what happened after it -- not the machine's boot.
+vm_audit_checkpoint() {
+  vm_ssh 'date +%T'
+}
+
+# vm_selinux_denials prints the guest's AVC denials since the checkpoint that
+# touch the installer's footprint -- its containers and /var/lib/inbuxa -- one
+# per line, or nothing. Reading the audit log needs root.
+vm_selinux_denials() {
+  vm_ssh "sudo ausearch -i -m avc,user_avc -ts '$1' 2>/dev/null" \
+    | grep -iE 'inbuxa|container_t|container_file_t|svirt|conmon' || true
+}
