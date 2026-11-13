@@ -25,7 +25,7 @@ import (
 )
 
 // ServerVersion is the inbuxa-server release this installer installs.
-const ServerVersion = "27.1-rc.15"
+const ServerVersion = "27.1-rc.21"
 
 // ServerImage is that release as a container image.
 const ServerImage = "registry.coffeylabs.org/inbuxa/inbuxa-server:" + ServerVersion
@@ -35,8 +35,8 @@ const ServerImage = "registry.coffeylabs.org/inbuxa/inbuxa-server:" + ServerVers
 // rather than fetched beside the download: a checksum that arrives with the
 // file only proves the file arrived.
 var ServerSHA256 = map[string]string{
-	"amd64": "8d3ea5c7753d344b7222eeb70a902bd069c8c1868c6d3db4e467b77fce39fdc8",
-	"arm64": "ba6943074a8cc4636dbd88bac7802826c4a1bb1a329fb2e5cd52ff18c11a3413",
+	"amd64": "97186cd868150573ded1c554d2e4d81426f86f11343f00f64b2cd4ae64ac1b7a",
+	"arm64": "16c2d485fc39d3fee23373a71100b0b51f93376c9707cba3b39a0850495989f7",
 }
 
 // ServerTarball is where the release's tarball for an architecture is.
@@ -51,15 +51,15 @@ func ServerTarball(arch string) string {
 // unavailable until one does. INBUXA_CONSOLE_TARBALL and
 // INBUXA_WEBMAIL_TARBALL name a local file instead, for testing.
 const (
-	ConsoleVersion = "27.1-rc.10"
-	ConsoleSHA256  = "92e3ced41e92d6564a6e3b593d1903fd6777734d337978d6d2cc669f4d848ffe"
-	WebmailVersion = "27.1-rc.3" // its tag is inbuxa-v<this>
+	ConsoleVersion = "27.1-rc.14"
+	ConsoleSHA256  = "c723318b31fbbbae3d4b2f8fcb95187c9a4c5e3250460410879681d96fbad19b"
+	WebmailVersion = "27.1-rc.4" // its tag is inbuxa-v<this>
 )
 
 // WebmailSHA256 is the SHA-256 of each architecture's webmail tarball.
 var WebmailSHA256 = map[string]string{
-	"amd64": "055fcdaaf322ea743a71df4dc0fd8b7ea12b15c07cc6008276d30c5e2508525f",
-	"arm64": "efc6b65e3377125b178c9d740733f396124a007d80809d48b33e6b5bca8ef3c5",
+	"amd64": "43843042ffca492f6fd0e710e07294786a4bfd0d8e0f1328fae705c7dbadcecd",
+	"arm64": "b1ab99875c17ad3cb0355e1ab137d4c10e94b8596a5aceaa070a5623a6d997a2",
 }
 
 // ConsoleTarball is where the console's release tarball is.
@@ -84,8 +84,8 @@ func WebmailTarball(arch string) string {
 //
 // RelaySHA256 is the SHA-256 of each architecture's relay binary.
 var RelaySHA256 = map[string]string{
-	"amd64": "6e3540c2caec049a7451d268f46f06de1f515b0834ccb480add2faa736291868",
-	"arm64": "aea34f49c8de3fb1c0bd3b9579fc70f7bad8efe1a832369cff78217141158a76",
+	"amd64": "6d2580acac8c63e532c05028dca284b51af0ee6cc3da94bcbc850d187f496f2c",
+	"arm64": "c0c046b63bf1fca93748cd9df55a272e98ed922de1533b61989be3a9e391e51c",
 }
 
 // RelayKeys are the inbuxa release keys that sign a relay binary, as
