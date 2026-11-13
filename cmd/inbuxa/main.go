@@ -81,6 +81,8 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa cluster join -f FILE
                              point this node's server at the shared store in
                              the file's cluster block and give it its role
+  inbuxa completions SHELL   a completion script for bash, zsh or fish
+  inbuxa man                 the manual page, in roff (inbuxa man > inbuxa.1)
   inbuxa version             this program's version
 
 install flags:
@@ -235,6 +237,10 @@ func main() {
 		os.Exit(relayCmd(os.Args[2:]))
 	case "cluster":
 		os.Exit(clusterCmd(os.Args[2:]))
+	case "completions":
+		os.Exit(completionsCmd(os.Args[2:]))
+	case "man":
+		os.Exit(manCmd(os.Args[2:]))
 	case "version":
 		fmt.Println(version)
 	case "-h", "--help", "help":
