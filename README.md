@@ -294,6 +294,8 @@ is tested on a throwaway virtual machine rather than on anybody's desk:
     e2e/vm/run.sh e2e/cases/status-export.sh  intent against reality, and the file
     OLD_REF=<commit> e2e/vm/run.sh e2e/cases/upgrade-volumes.sh
                                               an install from before #5, upgraded
+    DISTRO=fedora e2e/vm/run.sh e2e/cases/selinux.sh
+                                              the SELinux-sensitive paths, with it enforcing
     e2e/vm/down.sh                            remove it
 
 `SERVER_BINARY=path/to/inbuxa e2e/vm/run.sh …` installs a server build
@@ -307,6 +309,15 @@ Each case starts from a copy of the machine taken when it was new, so a run
 is free to break it and a failure is the installer's rather than the last
 run's leftovers. `e2e/vm/up.sh` needs qemu, KVM and xorriso; nothing needs
 root on your machine.
+
+On Fedora and Rocky the machine runs SELinux enforcing, and the installer has
+to live within it -- a container could not once read a directory mounted into
+it. So on those two, `run.sh` reads the audit log after *any* case and fails
+the run if the installer provoked an SELinux denial, even one the case
+survived; `SELINUX_IGNORE=1` downgrades that to a warning. `e2e/cases/selinux.sh`
+drives the paths that have been caught before (the backup archives the
+server's volumes through a container) and checks them directly; on a
+distribution without SELinux enforcing it skips and passes.
 
 ## License
 

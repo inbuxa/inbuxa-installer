@@ -61,4 +61,29 @@ vm_scp "$ROOT/$CASE" lab@127.0.0.1:/tmp/case.sh >/dev/null
 vm_ssh 'chmod +x /tmp/inbuxa /tmp/case.sh; [ ! -f /tmp/inbuxa-old ] || chmod +x /tmp/inbuxa-old'
 
 echo "==> running $(basename "$CASE")"
-vm_ssh 'sudo -E bash /tmp/case.sh'
+# On Fedora/Rocky the case runs under SELinux enforcing; note the time first so
+# the scan afterwards sees only what the case provoked, not the boot.
+CKPT=""
+if vm_selinux_enforcing; then CKPT="$(vm_audit_checkpoint)"; fi
+rc=0
+vm_ssh 'sudo -E bash /tmp/case.sh' || rc=$?
+
+# The SELinux tier: a case that passed its own checks still fails the run if
+# the installer made SELinux deny something -- a denial it happened to survive
+# today is a latent break. SELINUX_IGNORE=1 downgrades that to a warning.
+if [ -n "$CKPT" ]; then
+  echo "==> SELinux: denials since the case began"
+  DEN="$(vm_selinux_denials "$CKPT")"
+  if [ -n "$DEN" ]; then
+    echo "$DEN" | sed 's/^/    /'
+    if [ "${SELINUX_IGNORE:-}" = 1 ]; then
+      echo "    SELINUX_IGNORE=1: not failing the run on these."
+    else
+      echo "    the installer must not provoke SELinux denials (SELINUX_IGNORE=1 to override)" >&2
+      rc=1
+    fi
+  else
+    echo "    none -- SELinux stayed out of the installer's way"
+  fi
+fi
+exit "$rc"
