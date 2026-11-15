@@ -30,6 +30,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,6 +83,9 @@ func For(f host.Facts, wantContainers, wantHostWebmail bool) []Need {
 	var needs []Need
 	if wantContainers {
 		needs = append(needs, runtimeNeeds(f)...)
+		if f.IPv6 {
+			needs = append(needs, dockerIPv6Need(f, needs))
+		}
 	}
 	// The webmail on the host runs on the installer's own Node, in
 	// /opt/inbuxa/node, whatever else the machine has: the version it was
@@ -190,6 +194,117 @@ func dockerNeed(f host.Facts) Need {
 		}},
 	}
 	return n
+}
+
+// dockerIPv6Need turns on Docker's own IPv6 forwarding where it is off, so
+// a client that connects over IPv6 reaches the containers with its own
+// address. Without it docker-proxy relays the connection, and the server
+// sees the project network's gateway for every IPv6 client: SPF and DMARC
+// are checked against it, and bans and rate limits lump them together (#65).
+//
+// It is offered for Docker that is here and relays, and for Docker this run
+// is about to install, whose version is not known yet; the step looks again
+// once it is there and leaves a Docker that already forwards alone. Not for
+// podman, which forwards both families itself, and not for a daemon.json
+// that is not JSON, which the plan warns about instead: writing over a file
+// that cannot be read is not a fix.
+func dockerIPv6Need(f host.Facts, before []Need) Need {
+	installing := false
+	for _, n := range before {
+		if n.Name == "docker" && n.Fixable {
+			installing = true
+		}
+	}
+	if !installing {
+		if f.Runtime.Kind != "docker" || !f.Runtime.Usable || f.Runtime.ForwardsIPv6 {
+			return Need{}
+		}
+		cur, _ := os.ReadFile(host.DockerDaemonConfig)
+		if _, err := host.DockerForwardsIPv6(f.Runtime.Version, cur); err != nil {
+			return Need{}
+		}
+	}
+	n := Need{Name: "docker IPv6 forwarding", Because: "mail and web clients that connect over IPv6", Fixable: true}
+	if installing {
+		n.Actions = append(n.Actions, "if the Docker it installs relays IPv6 rather than forwarding it:")
+	}
+	n.Actions = append(n.Actions,
+		`set "ip6tables": true in `+host.DockerDaemonConfig+` (and "experimental": true, which Docker before 27 needs for it), keeping a copy of the file as it was`,
+		"restart Docker, which restarts the containers already running on this machine",
+	)
+	n.steps = []step{{"turning on Docker's IPv6 forwarding", dockerIPv6On}}
+	return n
+}
+
+func dockerIPv6On(ctx context.Context, log io.Writer) error {
+	out, err := exec.CommandContext(ctx, "docker", "version", "--format", "{{.Server.Version}}").Output()
+	if err != nil {
+		return fmt.Errorf("asking docker its version: %w", err)
+	}
+	version := strings.TrimSpace(string(out))
+	path := host.DockerDaemonConfig
+	cur, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	on, err := host.DockerForwardsIPv6(version, cur)
+	if err != nil {
+		return err
+	}
+	if on {
+		fmt.Fprintf(log, "    Docker %s already forwards IPv6\n", version)
+		return nil
+	}
+	cfg := map[string]any{}
+	if len(strings.TrimSpace(string(cur))) > 0 {
+		if err := json.Unmarshal(cur, &cfg); err != nil {
+			return err
+		}
+	}
+	cfg["ip6tables"] = true
+	if host.DockerMajor(version) < 27 {
+		cfg["experimental"] = true
+	}
+	next, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if cur != nil {
+		backup := path + ".before-inbuxa"
+		if _, err := os.Stat(backup); os.IsNotExist(err) {
+			if err := os.WriteFile(backup, cur, 0o644); err != nil {
+				return err
+			}
+			fmt.Fprintf(log, "    the file as it was is in %s\n", backup)
+		}
+	}
+	if err := writeFile(path, append(next, '\n')); err != nil {
+		return err
+	}
+	if err := run(ctx, log, "systemctl", "restart", "docker"); err != nil {
+		// A daemon that will not start on the new file is worse than one
+		// that relays IPv6: put the old one back and start it on that.
+		if cur != nil {
+			_ = writeFile(path, cur)
+		} else {
+			_ = os.Remove(path)
+		}
+		_ = run(ctx, log, "systemctl", "restart", "docker")
+		return fmt.Errorf("docker did not restart with ip6tables on, so %s is back as it was: %w", path, err)
+	}
+	return nil
+}
+
+// writeFile replaces path in one step, so a reader never finds half a file.
+func writeFile(path string, b []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // composeNeed is the same plugin whichever runtime is underneath: compose

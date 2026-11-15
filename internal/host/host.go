@@ -14,6 +14,7 @@ package host
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -41,6 +42,13 @@ type Facts struct {
 	DiskFreeGB int     // on the filesystem that would hold the install
 	MemoryMB   int
 	Existing   string // path of a previous install's state file, or ""
+
+	// IPv6 is whether this kernel has IPv6 turned on. When it does, clients
+	// can connect over it, and the project network has to carry it too:
+	// Docker relays an IPv6 connection to an IPv4-only container from its
+	// own gateway, so every IPv6 client arrives from one private address
+	// (#65).
+	IPv6 bool
 }
 
 // OSInfo is the distribution, as os-release describes it.
@@ -64,6 +72,14 @@ type Runtime struct {
 	Compose string // "v2" when compose works, "" otherwise
 	Socket  string // for podman, the API socket compose is pointed at
 	Why     string // why it is unusable, in a sentence fit to show someone
+
+	// ForwardsIPv6 is whether the runtime forwards a published port's IPv6
+	// connections to a container with the client's own address. Podman
+	// does. Docker does from 27 on, unless turned off; before 27 only with
+	// ip6tables turned on, which is experimental there. Without it Docker
+	// relays them through docker-proxy, and the container sees the
+	// gateway instead of the client.
+	ForwardsIPv6 bool
 
 	// What is missing, named rather than described, so the caller does not
 	// have to read Why to decide what to do. Reporting only the first thing
@@ -140,6 +156,7 @@ func Survey(ctx context.Context) Facts {
 		Node:     surveyNode(ctx),
 		Glibc:    surveyGlibc(ctx),
 		MemoryMB: memoryMB(),
+		IPv6:     kernelIPv6(),
 	}
 	if u, err := user.Current(); err == nil {
 		f.Root = u.Uid == "0"
@@ -244,6 +261,8 @@ func surveyDocker(ctx context.Context) Runtime {
 	}
 	r.Usable = true
 	r.Version = strings.TrimSpace(string(out))
+	daemon, _ := os.ReadFile(DockerDaemonConfig)
+	r.ForwardsIPv6, _ = DockerForwardsIPv6(r.Version, daemon)
 
 	if err := exec.CommandContext(ctx, bin, "compose", "version").Run(); err == nil {
 		r.Compose = "v2"
@@ -305,8 +324,58 @@ func surveyPodman(ctx context.Context) Runtime {
 		r.Why = "the compose plugin is not installed"
 	default:
 		r.Usable = true
+		// Netavark forwards published ports with nftables for both
+		// families, so the container sees the client's own address.
+		r.ForwardsIPv6 = true
 	}
 	return r
+}
+
+// DockerDaemonConfig is the Docker daemon's own configuration file.
+const DockerDaemonConfig = "/etc/docker/daemon.json"
+
+// DockerForwardsIPv6 works out from the engine's version and its
+// daemon.json whether Docker forwards IPv6 connections to containers itself
+// (ip6tables) rather than relaying them. ip6tables is on by default from
+// Docker 27; before that it is off, and turning it on also takes
+// "experimental", without which the daemon refuses to start.
+//
+// The error is for a daemon.json that is not JSON: then nothing can be said,
+// and nothing should be written over it either.
+func DockerForwardsIPv6(version string, daemonJSON []byte) (bool, error) {
+	cfg := map[string]any{}
+	if len(strings.TrimSpace(string(daemonJSON))) > 0 {
+		if err := json.Unmarshal(daemonJSON, &cfg); err != nil {
+			return false, fmt.Errorf("%s: %w", DockerDaemonConfig, err)
+		}
+	}
+	on, set := cfg["ip6tables"].(bool)
+	if DockerMajor(version) >= 27 {
+		return !set || on, nil
+	}
+	exp, _ := cfg["experimental"].(bool)
+	return set && on && exp, nil
+}
+
+// DockerMajor is the major number of an engine version such as
+// "26.1.5+dfsg1", or 0 when there is none to read.
+func DockerMajor(version string) int {
+	major, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(version), "v"), ".")
+	n, err := strconv.Atoi(major)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// kernelIPv6 is whether IPv6 is on: the module is loaded (if_inet6 exists
+// only then) and not turned off for every interface.
+func kernelIPv6() bool {
+	if _, err := os.Stat("/proc/net/if_inet6"); err != nil {
+		return false
+	}
+	b, err := os.ReadFile("/proc/sys/net/ipv6/conf/all/disable_ipv6")
+	return err != nil || strings.TrimSpace(string(b)) != "1"
 }
 
 // ComposePluginPath is where this installer puts the compose plugin, and
