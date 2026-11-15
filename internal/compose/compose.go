@@ -80,12 +80,20 @@ type Stack struct {
 	ConsoleBind string
 	WebmailBind string
 
-	Subnet    string
-	GatewayIP string // the project network's gateway: where the host is, seen from inside it
-	ServerIP  string
-	ConsoleIP string
-	WebmailIP string
-	CaddyIP   string
+	Subnet string
+	// IPv6Subnet, when set, gives the network IPv6 as well, so that a
+	// client connecting over IPv6 reaches the containers with its own
+	// address. On an IPv4-only network Docker relays such a connection
+	// over IPv4 from the gateway, and the server saw every IPv6 client as
+	// GatewayIP: SPF and DMARC failed for IPv6 senders, they shared one
+	// set of bans and rate limits, and GatewayIP is an address the server
+	// is told never to ban (#65). Empty on a machine without IPv6.
+	IPv6Subnet string
+	GatewayIP  string // the project network's gateway: where the host is, seen from inside it
+	ServerIP   string
+	ConsoleIP  string
+	WebmailIP  string
+	CaddyIP    string
 
 	MailPorts []int // published as-is: 25, 465, 993, 995, 4190
 

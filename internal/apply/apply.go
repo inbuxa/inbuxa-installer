@@ -50,6 +50,9 @@ const (
 	DefaultWebmailImage = "registry.coffeylabs.org/inbuxa/inbuxa-webmail:" + release.WebmailVersion
 	DefaultCaddyImage   = "docker.io/library/caddy:2-alpine"
 	DefaultSubnet       = "172.31.253.0/24"
+	// DefaultIPv6Subnet is a unique local /64 for the same network, on a
+	// machine with IPv6 (#65). Nothing outside the machine ever sees it.
+	DefaultIPv6Subnet = "fd69:6e62:7578::/64"
 )
 
 // Result is what the operator is left holding.
@@ -145,6 +148,9 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		ConsoleBind:  "127.0.0.1:8082",
 		WebmailBind:  "127.0.0.1:8080",
 		Subnet:       DefaultSubnet,
+	}
+	if f.IPv6 {
+		stack.IPv6Subnet = DefaultIPv6Subnet
 	}
 	// With --proxy snippets the operator's nginx routes 443 by name, and the
 	// server serves its own names with its own certificates (#48). A new
