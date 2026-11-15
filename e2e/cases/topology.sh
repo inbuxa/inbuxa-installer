@@ -140,7 +140,7 @@ cat > /tmp/bad.json <<'JSON'
 JSON
 OUT="$(/tmp/inbuxa plan -f /tmp/bad.json --machine a 2>&1)"; rc=$?
 [ $rc -ne 0 ] && ok "two mail servers is refused (exit $rc)" || bad "two mail servers was accepted"
-has "$OUT" "shared store" "and the refusal says why"
+has "$OUT" "carry a cluster block" "and the refusal says why"
 
 echo
 echo "==> $pass passed, $fail failed"
