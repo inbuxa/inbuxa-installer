@@ -272,6 +272,9 @@ func Build(f host.Facts, o Options) (Plan, error) {
 	// tarball. The installer says what it would do about each and does it when
 	// told, rather than handing the operator a chore and calling it an error.
 	p.Needs = deps.For(f, wantContainers, wantHostWebmail)
+	if w := ipv6Warning(f, wantContainers, o.InstallDeps); w != "" {
+		p.Warnings = append(p.Warnings, w)
+	}
 
 	for _, c := range []Component{Server, Console, Webmail} {
 		s := o.Shape(c)
@@ -461,6 +464,24 @@ func Build(f host.Facts, o Options) (Plan, error) {
 
 // covered says whether a cell's unavailability is one of the things the
 // installer offered to fix.
+// ipv6Warning is what the operator should hear about IPv6 when Docker here
+// relays it and this run will not change that: every client that connects
+// over IPv6 would reach the suite from one private address (#65).
+func ipv6Warning(f host.Facts, wantContainers, installDeps bool) string {
+	if !wantContainers || !f.IPv6 || f.Runtime.Kind != "docker" || !f.Runtime.Usable || f.Runtime.ForwardsIPv6 {
+		return ""
+	}
+	const why = "every client that connects over IPv6 would reach the suite from one private address, so mail from IPv6 senders fails SPF and their bans and rate limits are shared"
+	cur, _ := os.ReadFile(host.DockerDaemonConfig)
+	if _, err := host.DockerForwardsIPv6(f.Runtime.Version, cur); err != nil {
+		return fmt.Sprintf("Docker %s relays IPv6 rather than forwarding it, and %v: until \"ip6tables\" is on there, %s", f.Runtime.Version, err, why)
+	}
+	if installDeps {
+		return ""
+	}
+	return fmt.Sprintf("Docker %s relays IPv6 rather than forwarding it: %s. --install-deps turns its IPv6 forwarding on (and restarts Docker); or keep the mail host's AAAA record out of DNS", f.Runtime.Version, why)
+}
+
 func covered(needs []deps.Need, c Component, s Shape) bool {
 	want := map[string]bool{}
 	switch {
