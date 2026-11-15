@@ -178,9 +178,18 @@ services:
 
 networks:
   stack:
+{{- if .IPv6Subnet}}
+    # IPv6 as well, so a client that connects over IPv6 reaches the
+    # containers with its own address. On an IPv4-only network Docker relays
+    # those connections over IPv4, and every one arrives from the gateway.
+    enable_ipv6: true
+{{- end}}
     ipam:
       config:
         - subnet: {{.Subnet}}
+{{- if .IPv6Subnet}}
+        - subnet: {{.IPv6Subnet}}
+{{- end}}
 {{- end}}
 {{- if or .Server .Proxy}}
 

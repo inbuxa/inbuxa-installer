@@ -205,3 +205,24 @@ func TestFrontEndsOnTheHost(t *testing.T) {
 		t.Errorf("nginx-inbuxa.conf:\n%s", nginx)
 	}
 }
+
+// #65: on a machine with IPv6 the project network carries it too, or Docker
+// relays every IPv6 client from the gateway; without IPv6 it stays as it was.
+func TestNetworkCarriesIPv6WhenTheMachineHasIt(t *testing.T) {
+	s := stack(false)
+	c, _ := render(t, s)
+	if strings.Contains(c, "enable_ipv6") || strings.Contains(c, "fd69:") {
+		t.Errorf("a machine without IPv6 got an IPv6 network:\n%s", c)
+	}
+	s = stack(false)
+	s.IPv6Subnet = "fd69:6e62:7578::/64"
+	c, _ = render(t, s)
+	for _, want := range []string{"    enable_ipv6: true\n", "        - subnet: 172.31.253.0/24\n        - subnet: fd69:6e62:7578::/64\n"} {
+		if !strings.Contains(c, want) {
+			t.Errorf("compose.yaml lacks %q:\n%s", want, c)
+		}
+	}
+	if s.GatewayIP != "172.31.253.1" {
+		t.Errorf("the IPv4 gateway moved: %q", s.GatewayIP)
+	}
+}

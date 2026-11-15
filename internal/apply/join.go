@@ -143,6 +143,9 @@ func Join(ctx context.Context, p plan.Plan, f host.Facts, key string, log Log) (
 		Subnet:          DefaultSubnet,
 		ACMEDirectory:   o.ACMEDirectory,
 	}
+	if f.IPv6 {
+		stack.IPv6Subnet = DefaultIPv6Subnet
+	}
 	if o.Shape(plan.Console) != plan.Skip {
 		stack.ConsoleURL = consoleURL
 	}
