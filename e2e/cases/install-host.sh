@@ -118,6 +118,15 @@ grep -q "server.*installed as a host" <<<"$STATUS" && ok "status: the server is 
 /tmp/inbuxa export 2>/dev/null | grep -A1 '"kind": "server"' | grep -q '"shape": "host"' && ok "export writes the server as host" || bad "export does not say host"
 
 echo
+echo "==> the server writes log files, for the console's Logs page (#70)"
+logfile() { ls -t /var/log/inbuxa/inbuxa.log.* 2>/dev/null | head -1; }
+for _ in $(seq 1 30); do [ -s "$(logfile)" ] && break; sleep 2; done
+[ -s "$(logfile)" ] && ok "a log file in /var/log/inbuxa: $(basename "$(logfile)")" || bad "no inbuxa.log.* in /var/log/inbuxa"
+[ "$(stat -c %U /var/log/inbuxa 2>/dev/null)" = inbuxa ] && ok "the directory belongs to the server's user" || bad "/var/log/inbuxa belongs to $(stat -c %U /var/log/inbuxa 2>/dev/null)"
+systemctl show -p LogsDirectory $UNIT | grep -q "=inbuxa" && ok "and the unit keeps it (LogsDirectory)" || bad "the unit has no LogsDirectory"
+grep -q '"logFiles": true' /etc/inbuxa/install.json && ok "the install record says it has them" || bad "the install record doesn't say logFiles"
+
+echo
 echo "==> running it again converges rather than duplicating"
 OUT="$(/tmp/inbuxa install --local --domain example.test --server host --yes 2>&1)"; rc=$?
 [ $rc -eq 0 ] && ok "a second run succeeds" || { bad "second run exit $rc"; echo "$OUT" | tail -10 | sed 's/^/    /'; }
