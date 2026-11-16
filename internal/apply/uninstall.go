@@ -67,6 +67,9 @@ func UninstallPlan(st *state.State, purge bool) Removal {
 	if st.Shapes["server"] == string(plan.Host) {
 		r.Remove = append(r.Remove, HostServerUnit+", "+HostServerBinary+" and any older binaries kept beside it")
 		keepOrRemove(filepath.Join(dir, "server") + " (the server's configuration and mail) and its user, inbuxa")
+		if exists(hostLogDir) {
+			keepOrRemove(hostLogDir + " (the server's log files)")
+		}
 	}
 	if st.Shapes["console"] == string(plan.Host) {
 		r.Remove = append(r.Remove, filepath.Join(dir, "console")+" (the console's files)")
@@ -140,6 +143,7 @@ func Uninstall(ctx context.Context, st *state.State, purge bool, f host.Facts, l
 		os.Remove(filepath.Join(dir, "server.env"))
 		if purge {
 			os.RemoveAll(filepath.Join(dir, "server"))
+			os.RemoveAll(hostLogDir)
 			runQuiet(ctx, "userdel", HostServerUser)
 		}
 	}

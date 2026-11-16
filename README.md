@@ -140,6 +140,13 @@ This is early. What is built:
   the server, which may convert its store on first start, it is stopped and
   its own data archived into `<dir>/backups` (`--no-backup` to skip; a store
   kept elsewhere, PostgreSQL or S3, is backed up where it lives).
+  A server installed before the installer turned on its log files (#70)
+  writes none, so the console's Logs page is empty: `--key -` with an API
+  key made in the console gives it them, upgrade due or not. They go to
+  `/var/log/inbuxa` on the host and `/var/lib/inbuxa/logs` on the data
+  volume in a container, one file a day, deleted after 30 days on a new
+  install (Settings › Security › Security, Log files). They hold IP and email
+  addresses.
 
 - **`uninstall [--purge]`** -- takes away what the installer put on this
   machine: containers, units, binaries (and the old ones kept for rollback),

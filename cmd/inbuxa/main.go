@@ -62,7 +62,10 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa upgrade [component…]  move what is here to the releases this
                              installer installs: --dry-run, --yes,
                              --no-backup, --check (report only; exit 10 if
-                             anything can be upgraded)
+                             anything can be upgraded), --key (an API key,
+                             to give a server installed before log files
+                             were turned on the ones the console's Logs
+                             page reads; "-" reads it from standard input)
   inbuxa uninstall           take the programs away, keep the data:
                              --dry-run, --yes, --purge (the data too)
   inbuxa certs [--key KEY]   the mail server's certificate: what its mail
@@ -106,8 +109,10 @@ install flags:
                              move the server between a container and the host
                              (run install again with the other --server), and
                              to move a --proxy snippets install made before
-                             nginx passed the server's names through to it;
-                             "-" reads it from standard input, and
+                             nginx passed the server's names through to it,
+                             or to give a server installed before log files
+                             were turned on the ones the console's Logs page
+                             reads; "-" reads it from standard input, and
                              INBUXA_API_KEY works too
   --answers FILE             read these options from a JSON file, for an
                              unattended install (cloud-init, Ansible); keys
@@ -892,6 +897,7 @@ func upgradeCmd(args []string) int {
 	yes := fs.Bool("yes", false, "")
 	noBackup := fs.Bool("no-backup", false, "")
 	check := fs.Bool("check", false, "")
+	key := fs.String("key", os.Getenv("INBUXA_API_KEY"), "")
 	// Components and options in any order: `upgrade server --yes` as well as
 	// `upgrade --yes server`. The flag package stops at the first argument
 	// that isn't an option, so parse again after each one.
@@ -940,8 +946,14 @@ func upgradeCmd(args []string) int {
 		}
 		fmt.Printf("  %-8s %-10s %s\n", s.Component, s.Shape, mark)
 	}
-	if due == 0 {
+	// A server installed before #70 writes no log files, and is given them
+	// here when there is an API key to do it with.
+	logFiles := apply.LogFilesDue(st)
+	if due == 0 && (*check || !logFiles || *key == "") {
 		fmt.Println("\nNothing to do: this is what this installer installs. A newer installer brings newer releases.")
+		if logFiles {
+			fmt.Println("\nBut " + apply.LogFilesHint + ".")
+		}
 		return 0
 	}
 	// --check reports and stops, with an exit code a script or a cron job can
@@ -950,6 +962,12 @@ func upgradeCmd(args []string) int {
 	if *check {
 		fmt.Printf("\n%d component(s) can be upgraded. Run `inbuxa upgrade` to apply.\n", due)
 		return 10
+	}
+	switch {
+	case logFiles && *key == "":
+		fmt.Println("\nAfterwards, " + apply.LogFilesHint + ".")
+	case logFiles:
+		fmt.Println("\nThe server is also given the log files the console's Logs page reads, which it has not had.")
 	}
 	backup := !*noBackup
 	for _, s := range steps {
@@ -973,10 +991,26 @@ func upgradeCmd(args []string) int {
 		fmt.Fprintln(os.Stderr, "upgrading needs root")
 		return 1
 	}
+	k := ""
+	if logFiles && *key != "" {
+		var err error
+		if k, err = readKey(*key); err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			return 2
+		}
+	}
 	fmt.Println("\nUpgrading:")
-	if err := apply.RunUpgrade(context.Background(), st, steps, backup, f, &printer{}); err != nil {
-		fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
-		return 1
+	if due > 0 {
+		if err := apply.RunUpgrade(context.Background(), st, steps, backup, f, &printer{}); err != nil {
+			fmt.Fprintln(os.Stderr, "\nstopped: "+err.Error())
+			return 1
+		}
+	}
+	if k != "" {
+		if err := apply.LogFiles(context.Background(), st, k, f, &printer{}); err != nil {
+			fmt.Fprintln(os.Stderr, "\nthe log files were not turned on: "+err.Error())
+			return 1
+		}
 	}
 	fmt.Println("\nDone.")
 	return 0

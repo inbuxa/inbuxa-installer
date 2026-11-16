@@ -276,9 +276,12 @@ func (m *serverMove) toHost(ctx context.Context, stack compose.Stack, snippets b
 		return back(err)
 	}
 	defer os.RemoveAll(stage)
+	// Not its log files (#70): on the host they go to /var/log/inbuxa, and
+	// a copy under the store would never be deleted. They stay in the
+	// volumes with the rest until those are removed.
 	out := exec.CommandContext(ctx, docker.CLI, "run", "--rm", "--user", "0", "--entrypoint", "tar",
 		"-v", "inbuxa_inbuxa-etc:/from/etc:ro", "-v", "inbuxa_inbuxa-data:/from/data:ro",
-		m.oldImage, "-cf", "-", "-C", "/from", ".")
+		m.oldImage, "-cf", "-", "-C", "/from", "--exclude=./data/"+strings.TrimPrefix(containerLogDir, containerDataPath), ".")
 	in := exec.CommandContext(ctx, "tar", "-xf", "-", "-C", stage)
 	if err := pipe(out, in); err != nil {
 		return back(fmt.Errorf("copying the server's volumes: %w", err))

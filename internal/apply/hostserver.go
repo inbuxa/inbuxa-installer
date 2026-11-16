@@ -187,13 +187,27 @@ func (h hostServer) WriteEnv(vars map[string]string) (bool, error) {
 // WriteUnit writes the unit and says whether it changed. configured adds the
 // condition that a finished install keeps: no configuration file, no start.
 func (h hostServer) WriteUnit(ctx context.Context, configured bool) (bool, error) {
+	changed, err := writeIfChanged(hostUnitPath, h.unit(configured), 0o644)
+	if err != nil {
+		return false, err
+	}
+	if changed {
+		if err := runQuiet(ctx, "systemctl", "daemon-reload"); err != nil {
+			return false, err
+		}
+	}
+	return changed, runQuiet(ctx, "systemctl", "enable", "--quiet", HostServerUnit)
+}
+
+// unit is the unit's text.
+func (h hostServer) unit(configured bool) string {
 	cond := ""
 	if configured {
 		cond = "# A server that has lost its configuration stays down rather than coming\n" +
 			"# back in bootstrap mode.\n" +
 			"ConditionPathExists=" + h.configPath() + "\n"
 	}
-	unit := fmt.Sprintf(`# Written by the inbuxa installer. Changes here are replaced on its next run.
+	return fmt.Sprintf(`# Written by the inbuxa installer. Changes here are replaced on its next run.
 [Unit]
 Description=inbuxa mail server
 Documentation=https://docs.inbuxa.org/
@@ -211,6 +225,10 @@ WorkingDirectory=%s
 # bind them, and survives the binary being replaced, which setcap does not.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# The log files the console's Logs page reads: systemd makes
+# /var/log/inbuxa at each start, owned by the user above.
+LogsDirectory=inbuxa
+LogsDirectoryMode=0750
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true
@@ -223,16 +241,6 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 `, cond, HostServerUser, HostServerUser, h.envPath(), HostServerBinary, h.configPath(), h.home())
-	changed, err := writeIfChanged(hostUnitPath, unit, 0o644)
-	if err != nil {
-		return false, err
-	}
-	if changed {
-		if err := runQuiet(ctx, "systemctl", "daemon-reload"); err != nil {
-			return false, err
-		}
-	}
-	return changed, runQuiet(ctx, "systemctl", "enable", "--quiet", HostServerUnit)
 }
 
 // Start (re)starts the server for a step of first boot, or as it runs from
