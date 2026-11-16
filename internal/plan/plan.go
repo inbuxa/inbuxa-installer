@@ -85,7 +85,8 @@ type Options struct {
 	// Key is an API key for what changes a running server's own settings:
 	// moving it between a container and the host, and fitting its HTTPS
 	// listener to --proxy snippets' name router on an install from before
-	// it (#48). Never written down.
+	// it (#48), and giving a server installed before #70 its log files.
+	// Never written down.
 	Key string
 
 	// Where this came from, when it came from a topology file: the machine's

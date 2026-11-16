@@ -108,6 +108,14 @@ CODE=$(curl -s -o /tmp/login.json -b /tmp/jar -w '%{http_code}' -H 'X-Requested-
 grep -q "urn:ietf:params:jmap:mail" /tmp/login.json && ok "and the session carries the mail capability" || bad "no mail capability in the session"
 
 echo
+echo "==> the server writes log files, for the console's Logs page (#70)"
+VOL=$($(rt) volume inspect -f '{{.Mountpoint}}' "$($(rt) volume ls -q | grep 'inbuxa-data$' | head -1)" 2>/dev/null)
+logfile() { ls -t "$VOL"/logs/inbuxa.log.* 2>/dev/null | head -1; }
+for _ in $(seq 1 30); do [ -s "$(logfile)" ] && break; sleep 2; done
+[ -s "$(logfile)" ] && ok "a log file in the server's /var/lib/inbuxa/logs: $(basename "$(logfile)")" || bad "no inbuxa.log.* in the data volume ($VOL/logs)"
+grep -q '"logFiles": true' /etc/inbuxa/install.json && ok "the install record says it has them" || bad "the install record doesn't say logFiles"
+
+echo
 echo "==> running it again converges rather than duplicating"
 OUT="$(/tmp/inbuxa install --local --domain example.test --yes 2>&1)"; rc=$?
 COUNT=$(compose ps --format '{{.Service}}' | sort -u | wc -l)

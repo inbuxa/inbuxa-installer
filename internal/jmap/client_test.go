@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -265,5 +266,98 @@ func TestPassThroughListenerPutsBackAnHTTPSListener(t *testing.T) {
 	}
 	if nets := https["overrideProxyTrustedNetworks"].(map[string]any); nets["172.31.253.1/32"] != true {
 		t.Errorf("trusted = %v", nets)
+	}
+}
+
+// tracers is an x:Tracer/query and /get answer listing ts.
+func tracers(ts ...string) string {
+	ids := make([]string, len(ts))
+	for i := range ts {
+		ids[i] = fmt.Sprintf("%q", fmt.Sprint(i))
+	}
+	return `{"methodResponses":[["x:Tracer/query",{"ids":[` + strings.Join(ids, ",") + `]},"0"],` +
+		`["x:Tracer/get",{"list":[` + strings.Join(ts, ",") + `]},"1"]]}`
+}
+
+const stdoutTracer = `{"id":"a","@type":"Stdout","enable":true,"level":"info"}`
+
+// An installed server has only the stdout tracer bootstrap gave it, so the
+// Log tracer the Logs page reads is created beside it, as the server's own
+// default would have been (#70).
+func TestEnsureLogTracerAddsOneBesideStdout(t *testing.T) {
+	c, seen := fake(t, map[string]string{
+		"x:Tracer/query": tracers(stdoutTracer),
+		"x:Tracer/set":   `{"methodResponses":[["x:Tracer/set",{"created":{"log":{"id":"b"}}},"0"]]}`,
+	})
+	got, err := c.EnsureLogTracer(context.Background(), "/var/lib/inbuxa/logs")
+	if err != nil || got != LogTracerAdded {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	if len(*seen) != 2 {
+		t.Fatalf("%d requests", len(*seen))
+	}
+	log := (*seen)[1]["args"].(map[string]any)["create"].(map[string]any)["log"].(map[string]any)
+	for k, want := range map[string]any{
+		"@type": "Log", "enable": true, "path": "/var/lib/inbuxa/logs",
+		"prefix": "inbuxa.log", "rotate": "daily", "level": "info", "ansi": false,
+	} {
+		if log[k] != want {
+			t.Errorf("%s = %v, want %v", k, log[k], want)
+		}
+	}
+}
+
+// Run again, nothing is written.
+func TestEnsureLogTracerLeavesOneThatIsThere(t *testing.T) {
+	c, seen := fake(t, map[string]string{
+		"x:Tracer/query": tracers(stdoutTracer, `{"id":"b","@type":"Log","enable":true,"path":"/var/log/inbuxa/","prefix":"inbuxa.log"}`),
+	})
+	got, err := c.EnsureLogTracer(context.Background(), "/var/log/inbuxa", "/var/lib/inbuxa/logs")
+	if err != nil || got != LogTracerPresent || len(*seen) != 1 {
+		t.Fatalf("got %v, %v after %d requests", got, err, len(*seen))
+	}
+}
+
+// A server moved between a container and the host takes the installer's
+// tracer with it, pointed at the directory its new shape has.
+func TestEnsureLogTracerMovesTheInstallersOwn(t *testing.T) {
+	c, seen := fake(t, map[string]string{
+		"x:Tracer/query": tracers(stdoutTracer, `{"id":"b","@type":"Log","enable":true,"path":"/var/lib/inbuxa/logs","prefix":"inbuxa.log"}`),
+		"x:Tracer/set":   `{"methodResponses":[["x:Tracer/set",{"updated":{"b":null}},"0"]]}`,
+	})
+	got, err := c.EnsureLogTracer(context.Background(), "/var/log/inbuxa", "/var/lib/inbuxa/logs")
+	if err != nil || got != LogTracerMoved {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	update := (*seen)[1]["args"].(map[string]any)["update"].(map[string]any)
+	if b, ok := update["b"].(map[string]any); !ok || b["path"] != "/var/log/inbuxa" || len(update) != 1 {
+		t.Errorf("update = %v", update)
+	}
+}
+
+// A Log tracer an administrator set up is theirs: one writing elsewhere, one
+// turned off, or one in the other shape's directory under a prefix of their
+// own is left alone, and nothing is added beside it.
+func TestEnsureLogTracerKeepsAnAdministrators(t *testing.T) {
+	for _, log := range []string{
+		`{"id":"b","@type":"Log","enable":true,"path":"/srv/logs","prefix":"inbuxa.log"}`,
+		`{"id":"b","@type":"Log","enable":false,"path":"/var/log/inbuxa","prefix":"inbuxa.log"}`,
+		`{"id":"b","@type":"Log","enable":true,"path":"/var/lib/inbuxa/logs","prefix":"mail"}`,
+	} {
+		c, seen := fake(t, map[string]string{"x:Tracer/query": tracers(stdoutTracer, log)})
+		got, err := c.EnsureLogTracer(context.Background(), "/var/log/inbuxa", "/var/lib/inbuxa/logs")
+		if err != nil || got != LogTracerKept || len(*seen) != 1 {
+			t.Errorf("%s: got %v, %v after %d requests", log, got, err, len(*seen))
+		}
+	}
+}
+
+func TestEnsureLogTracerRefusalIsAnError(t *testing.T) {
+	c, _ := fake(t, map[string]string{
+		"x:Tracer/query": tracers(stdoutTracer),
+		"x:Tracer/set":   `{"methodResponses":[["x:Tracer/set",{"notCreated":{"log":{"type":"invalidProperties","properties":["path"]}}},"0"]]}`,
+	})
+	if _, err := c.EnsureLogTracer(context.Background(), "/var/log/inbuxa"); err == nil || !strings.Contains(err.Error(), "path") {
+		t.Fatalf("err = %v", err)
 	}
 }

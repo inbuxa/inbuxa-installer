@@ -335,6 +335,25 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 			log.Info("your web server still terminates TLS for the server's names: run this again with --key to pass them through to it instead (#48)")
 		}
 		res, err := converge(ctx, o, stack, cmp, hs, serverChanged, existing, f, log)
+		// An install from before #70 has no log files; a run with a key
+		// gives it them, and after a move points them at this shape's
+		// directory.
+		if err == nil && (o.Key != "" || LogFilesDue(existing)) {
+			if o.Key == "" {
+				log.Info("%s", LogFilesHint)
+			} else {
+				log.Step("turning on the server's log files")
+				srv := &jmap.Client{BaseURL: "http://" + hostFinalBind, Token: o.Key}
+				if lerr := turnOnLogFiles(ctx, srv, onHost, mv != nil, cmp, log); lerr != nil {
+					log.Info("could not turn on the log files the console's Logs page reads: %v", lerr)
+				} else if !existing.LogFiles {
+					existing.LogFiles = true
+					if serr := existing.Save(); serr != nil {
+						log.Info("could not write %s: %v", state.Path, serr)
+					}
+				}
+			}
+		}
 		if err == nil && hw != nil {
 			// Its files may be new, or what it reads at start; or it may
 			// simply not be running.
@@ -465,6 +484,15 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 			log.Info("could not remove the setup's API key, which expires within the hour: %v", err)
 		}
 	}()
+
+	// Not a reason to stop: the mail works without them, and a later run
+	// with --key tries again.
+	log.Step("turning on the server's log files")
+	logFiles := true
+	if err := turnOnLogFiles(ctx, srv, onHost, false, cmp, log); err != nil {
+		logFiles = false
+		log.Info("could not turn on the log files the console's Logs page reads: %v", err)
+	}
 
 	if onHost {
 		log.Step("fitting the server's listeners to the host")
@@ -642,6 +670,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		st.Machine, st.Dir, st.Domain, st.MailHost, st.Local = o.Machine, dir, o.Domain, o.MailHost, o.Local
 		st.Runtime, st.Topology = f.Runtime.Kind, o.TopologyPath
 		st.PassThrough = stack.PassThrough
+		st.LogFiles = logFiles
 		st.Shapes = map[string]string{}
 		for _, c := range []plan.Component{plan.Server, plan.Console, plan.Webmail} {
 			if sh := o.Shape(c); sh != plan.Skip {

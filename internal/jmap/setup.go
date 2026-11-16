@@ -55,8 +55,11 @@ func (c *Client) Bootstrap(ctx context.Context, hostname, domain, dataPath strin
 		// certificates, so turning it on would only look like it had worked.
 		"requestTlsCertificate": false,
 		"generateDkimKeys":      true,
-		// The default logs to /var/log/stalwart, which does not exist in the
-		// image and is not a volume. A container logs to stdout.
+		// Bootstrap takes one tracer, and stdout is the one every later step
+		// reads when something fails: the journal on the host, the
+		// container's log otherwise. The log files the console's Logs page
+		// reads are added beside it once there is an API key
+		// (EnsureLogTracer, #70).
 		"tracer": map[string]any{
 			"@type": "Stdout", "enable": true, "level": "info",
 			"ansi": false, "multiline": false, "lossy": false,
@@ -548,4 +551,127 @@ func (c *Client) PassThroughListener(ctx context.Context, bind string, trusted [
 	}
 	_, err = DecodeSet(rs[0])
 	return err
+}
+
+// LogFilePrefix is what the installer's Log tracer names its files, and the
+// server's own default: inbuxa.log.2026-11-16 and so on, one a day.
+const LogFilePrefix = "inbuxa.log"
+
+// LogTracerChange is what EnsureLogTracer did.
+type LogTracerChange int
+
+const (
+	// LogTracerPresent: a Log tracer already writes to the path.
+	LogTracerPresent LogTracerChange = iota
+	// LogTracerAdded: there was none, and one was created.
+	LogTracerAdded
+	// LogTracerMoved: the installer's own tracer wrote to one of the paths
+	// it replaces, and now writes to the path.
+	LogTracerMoved
+	// LogTracerKept: a Log tracer someone else set up writes elsewhere, or
+	// is turned off, and was left as it is.
+	LogTracerKept
+)
+
+// Tracer is as much of a tracer as EnsureLogTracer reads.
+type Tracer struct {
+	ID     string `json:"id"`
+	Type   string `json:"@type"`
+	Path   string `json:"path"`
+	Prefix string `json:"prefix"`
+	Enable bool   `json:"enable"`
+}
+
+// Tracers lists the server's tracers.
+func (c *Client) Tracers(ctx context.Context) ([]Tracer, error) {
+	rs, err := c.Do(ctx,
+		Call{"x:Tracer/query", map[string]any{}, "0"},
+		Call{"x:Tracer/get", map[string]any{
+			"#ids": map[string]any{"resultOf": "0", "name": "x:Tracer/query", "path": "/ids"},
+		}, "1"},
+	)
+	if err != nil {
+		return nil, err
+	}
+	var got struct {
+		List []Tracer `json:"list"`
+	}
+	return got.List, json.Unmarshal(rs[1].Args, &got)
+}
+
+// EnsureLogTracer makes sure a Log tracer writes the server's log to files
+// in dir, which is what the console's Logs page (x:Log) reads. The server
+// adds one itself only when it has no tracer at all, and bootstrap gives it
+// a stdout tracer, so without this an installed server never writes a file.
+//
+// The files rotate daily under LogFilePrefix; the server deletes them after
+// inbuxa:LogSettings.keepForDays, which a new install sets to 30.
+//
+// A tracer an administrator set up is never changed: if any Log tracer is
+// there and is not the installer's, it is left as it is. The installer's is
+// told apart by its prefix and by writing to one of replaces, the path a
+// server in the other shape uses; that one is moved to dir, which is what a
+// server moved between a container and the host needs.
+func (c *Client) EnsureLogTracer(ctx context.Context, dir string, replaces ...string) (LogTracerChange, error) {
+	ts, err := c.Tracers(ctx)
+	if err != nil {
+		return 0, err
+	}
+	same := func(a, b string) bool { return strings.TrimRight(a, "/") == strings.TrimRight(b, "/") }
+	var ours, other *Tracer
+	for i, t := range ts {
+		if t.Type != "Log" {
+			continue
+		}
+		if same(t.Path, dir) && t.Enable {
+			return LogTracerPresent, nil
+		}
+		mine := false
+		for _, r := range replaces {
+			mine = mine || (same(t.Path, r) && t.Prefix == LogFilePrefix)
+		}
+		if mine && ours == nil {
+			ours = &ts[i]
+		} else if !mine {
+			other = &ts[i]
+		}
+	}
+	var call Call
+	change := LogTracerAdded
+	switch {
+	case other != nil:
+		return LogTracerKept, nil
+	case ours != nil:
+		change = LogTracerMoved
+		call = Call{"x:Tracer/set", map[string]any{"update": map[string]any{ours.ID: map[string]any{"path": dir}}}, "0"}
+	default:
+		call = Call{"x:Tracer/set", map[string]any{"create": map[string]any{"log": logTracer(dir)}}, "0"}
+	}
+	rs, err := c.Do(ctx, call)
+	if err != nil {
+		return 0, err
+	}
+	s, err := DecodeSet(rs[0])
+	if err != nil {
+		return 0, err
+	}
+	if change == LogTracerAdded {
+		if _, err := CreatedID(s, "log"); err != nil {
+			return 0, fmt.Errorf("x:Tracer/set: %w", err)
+		}
+	}
+	return change, nil
+}
+
+// logTracer is the Log tracer the installer creates: the server's own
+// default (crates/common/src/manager/defaults.rs), at dir.
+func logTracer(dir string) map[string]any {
+	return map[string]any{
+		"@type": "Log", "enable": true, "level": "info",
+		"path": dir, "prefix": LogFilePrefix, "rotate": "daily",
+		// Plain text: x:Log strips colour codes, but anyone reading the
+		// files with less or grep would not.
+		"ansi": false, "multiline": false, "lossy": false,
+		"events": map[string]any{}, "eventsPolicy": "exclude",
+	}
 }

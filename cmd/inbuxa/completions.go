@@ -47,7 +47,7 @@ func commands() []command {
 		{name: "status", desc: "Report what is installed here, and whether it agrees"},
 		{name: "doctor", desc: "Run a read-only health check of this install", flags: []string{"timeout"}},
 		{name: "backup", desc: "Archive this machine's mail server to <dir>/backups", flags: []string{"yes"}},
-		{name: "upgrade", desc: "Move what is here to the releases this installer installs", arg: "component", flags: []string{"dry-run", "yes", "no-backup", "check"}},
+		{name: "upgrade", desc: "Move what is here to the releases this installer installs", arg: "component", flags: []string{"dry-run", "yes", "no-backup", "check", "key"}},
 		{name: "uninstall", desc: "Remove the programs, keep the data", flags: []string{"dry-run", "yes", "purge"}},
 		{name: "certs", desc: "Inspect or renew the mail server's certificate", flags: []string{"key", "mail-host", "email", "acme-directory", "dry-run"}},
 		{name: "dns", desc: "Print the DNS records the domain needs", flags: []string{"refresh", "key", "domain"}},

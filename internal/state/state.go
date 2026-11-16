@@ -43,6 +43,11 @@ type State struct {
 	// before it are moved over by a run with --key.
 	PassThrough bool `json:"passThrough,omitempty"`
 
+	// LogFiles is whether the server was given the Log tracer the console's
+	// Logs page reads (#70). Installs from before it are given it by a run
+	// with --key.
+	LogFiles bool `json:"logFiles,omitempty"`
+
 	// Clustered is whether `inbuxa cluster join` pointed this node's server at
 	// a shared store; ClusterRole is the role it was given, empty for the node
 	// that carries every task.
