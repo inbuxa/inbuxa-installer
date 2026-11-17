@@ -42,15 +42,15 @@ import (
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/state"
 )
 
-// Images are the defaults. They are tags rather than digests for now: the
-// registry is ours and the tags are immutable releases, and pinning digests
-// here would mean this program needing a release of its own for every one of
-// theirs.
+// Images are the defaults. The suite's own name one release each, by tag:
+// the registry is ours, but its tags can be pushed again by anyone holding a
+// push token, so they are a release's name rather than a guarantee of its
+// contents. Caddy, from Docker Hub, is pinned by digest (release.CaddyImage).
 const (
 	DefaultServerImage  = release.ServerImage
 	DefaultConsoleImage = "registry.coffeylabs.org/inbuxa/inbuxa-admin:" + release.ConsoleVersion
 	DefaultWebmailImage = "registry.coffeylabs.org/inbuxa/inbuxa-webmail:" + release.WebmailVersion
-	DefaultCaddyImage   = "docker.io/library/caddy:2-alpine"
+	DefaultCaddyImage   = release.CaddyImage
 	DefaultSubnet       = "172.31.253.0/24"
 	// DefaultIPv6Subnet is a unique local /64 for the same network, on a
 	// machine with IPv6 (#65). Nothing outside the machine ever sees it.

@@ -17,6 +17,24 @@ const ServerVersion = "2026.11.11"
 // ServerImage is that release as a container image.
 const ServerImage = "registry.coffeylabs.org/inbuxa/inbuxa-server:" + ServerVersion
 
+// Caddy, the proxy in front of the console and the webmail, which holds
+// their TLS keys, from Docker Hub. It is pinned by the digest of its image
+// index, as the binaries are by their checksums: a tag there moves, and even
+// a full version's tag is pushed again when its image is rebuilt (for a new
+// Alpine, say). CaddyVersion is the tag the digest was read from, X.Y.Z of
+// caddy:X.Y.Z-alpine. This line has no pin-check: the pin is moved by hand,
+// like the versions here.
+// The digest is read with
+// `docker buildx imagetools inspect docker.io/library/caddy:<version>-alpine`.
+const (
+	CaddyVersion = "2.11.9"
+	CaddyDigest  = "sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0"
+)
+
+// CaddyImage is that image, by its digest alone, which every runtime the
+// installer drives reads the same way.
+const CaddyImage = "docker.io/library/caddy@" + CaddyDigest
+
 // ServerSHA256 is the SHA-256 of each architecture's release tarball, copied
 // from the release's SHA256SUMS when the version was moved and checked here
 // rather than fetched beside the download: a checksum that arrives with the
