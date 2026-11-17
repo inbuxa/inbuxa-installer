@@ -243,8 +243,7 @@ func Install(ctx context.Context, p Plan, o Options, log Log) error {
 
 	if p.Join {
 		log.Step("joining")
-		out, err := exec.CommandContext(ctx, "runuser", "-u", User, "--",
-			Binary, "join", o.Token, "--state", StateDir).CombinedOutput()
+		out, err := asRelay(ctx, "join", o.Token, "--state", StateDir).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("the join was refused: %s", strings.TrimSpace(strings.TrimPrefix(string(out), "inbuxa-relay: ")))
 		}
@@ -320,8 +319,8 @@ func putBinary(ctx context.Context, p Plan, log Log) error {
 		fmt.Fprintln(log.Out(), "    signed by an inbuxa release key")
 	}
 	// Run before it is put in place, as the relay tries a binary before an
-	// upgrade.
-	got := installedVersion(ctx, path)
+	// upgrade. Run as root: it is the checked file, in root's own directory.
+	got := versionOf(exec.CommandContext(ctx, path, "--version"))
 	if got == "" {
 		out, _ := exec.CommandContext(ctx, path, "--version").CombinedOutput()
 		return fmt.Errorf("the relay binary does not run here: %s", strings.TrimSpace(string(out)))
@@ -356,7 +355,7 @@ func Status(ctx context.Context, out io.Writer) bool {
 	enabled, _ := exec.CommandContext(ctx, "systemctl", "is-enabled", Unit).Output()
 	fmt.Fprintf(out, "%s: %s, %s at boot\n", Unit, state, strings.TrimSpace(string(enabled)))
 	fmt.Fprintf(out, "%s: inbuxa-relay %s (this installer installs %s)\n\n", Binary, v, release.RelayVersion())
-	cmd := exec.CommandContext(ctx, "runuser", "-u", User, "--", Binary, "status", "--state", StateDir)
+	cmd := asRelay(ctx, "status", "--state", StateDir)
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.Run()
 	return true
@@ -394,11 +393,11 @@ func Uninstall(ctx context.Context, purge, discardHeld bool, log Log) error {
 	}
 	if purge {
 		if _, err := os.Stat(Binary); err == nil {
-			args := []string{"-u", User, "--", Binary, "reset", "--state", StateDir}
+			args := []string{"reset", "--state", StateDir}
 			if discardHeld {
 				args = append(args, "--discard-held")
 			}
-			out, err := exec.CommandContext(ctx, "runuser", args...).CombinedOutput()
+			out, err := asRelay(ctx, args...).CombinedOutput()
 			if err != nil {
 				msg := strings.TrimSpace(strings.TrimPrefix(string(out), "inbuxa-relay: "))
 				msg = strings.ReplaceAll(msg, "Run `inbuxa-relay reset --discard-held`", "Add --discard-held")
@@ -509,14 +508,34 @@ func unitLinkListen(unit string) string {
 	return ""
 }
 
-// installedVersion is the version a relay binary says it is, or "" when it
-// isn't there or doesn't run.
+// installedVersion is the version the installed relay binary at path says
+// it is, or "" when it isn't there or doesn't run. It is asked as the relay
+// user: the binary is that user's to replace, so root never runs it.
 func installedVersion(ctx context.Context, path string) string {
-	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	return versionOf(asRelayRun(ctx, path, "--version"))
+}
+
+func versionOf(cmd *exec.Cmd) string {
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
 	return parseVersionOutput(string(out))
+}
+
+// asRelay runs the installed binary with args as the relay user, the one
+// that owns it and may have replaced it, never as root.
+func asRelay(ctx context.Context, args ...string) *exec.Cmd {
+	return asRelayRun(ctx, Binary, args...)
+}
+
+// asRelayRun is asRelay for the binary at path. It runs in a session of its
+// own, without root's terminal as its controlling one, so it can't push
+// input into the shell that ran the installer.
+func asRelayRun(ctx context.Context, path string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "runuser", append([]string{"-u", User, "--", path}, args...)...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	return cmd
 }
 
 func parseVersionOutput(out string) string {
