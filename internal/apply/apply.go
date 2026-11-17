@@ -330,12 +330,12 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	if err != nil {
 		return nil, err
 	}
-	override := filepath.Join(os.TempDir(), "inbuxa-bootstrap.yaml")
-	if err := os.WriteFile(override, []byte(
-		"services:\n  server:\n    environment:\n      INBUXA_RECOVERY_ADMIN: ${INBUXA_BOOTSTRAP_ADMIN:?}\n"), 0o600); err != nil {
+	override, cleanup, err := setupOverride("inbuxa-bootstrap.yaml",
+		"services:\n  server:\n    environment:\n      INBUXA_RECOVERY_ADMIN: ${INBUXA_BOOTSTRAP_ADMIN:?}\n")
+	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(override)
+	defer cleanup()
 
 	log.Step("starting the mail server in bootstrap mode")
 	serverURL := "http://" + stack.ServerBind
@@ -397,12 +397,12 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	// does the rest of the setup, is removed when the setup ends, and expires
 	// within the hour anyway, so a setup that stops halfway leaves nothing
 	// that still works.
-	basicOverride := filepath.Join(os.TempDir(), "inbuxa-basic-auth.yaml")
-	if err := os.WriteFile(basicOverride, []byte(
-		"services:\n  server:\n    environment:\n      INBUXA_HTTP_BASIC_AUTH: all\n"), 0o600); err != nil {
+	basicOverride, cleanupBasic, err := setupOverride("inbuxa-basic-auth.yaml",
+		"services:\n  server:\n    environment:\n      INBUXA_HTTP_BASIC_AUTH: all\n")
+	if err != nil {
 		return res, err
 	}
-	defer os.Remove(basicOverride)
+	defer cleanupBasic()
 	log.Step("restarting the mail server configured, to give the setup an API key")
 	if onHost {
 		if err := hs.Start(ctx, modeBasic, ""); err != nil {
@@ -952,4 +952,29 @@ func password(n int) (string, error) {
 		b[i] = alphabet[x.Int64()]
 	}
 	return string(b), nil
+}
+
+// setupOverride writes a compose override for one step of first boot, and
+// returns its path and what removes it. It goes in a new directory only root
+// can reach, never at a fixed name in the shared temporary directory, where
+// another local user could have put a file or a link of its own first.
+func setupOverride(name, content string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "inbuxa-setup-")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { os.RemoveAll(dir) }
+	path := filepath.Join(dir, name)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		_, err = f.WriteString(content)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return path, cleanup, nil
 }
