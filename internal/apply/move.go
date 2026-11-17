@@ -314,7 +314,7 @@ func (m *serverMove) toHost(ctx context.Context, stack compose.Stack, snippets b
 	if err := m.cameBack(ctx, hostSetupBind, func() string { return hs.Logs(ctx, "server", 400) }); err != nil {
 		return back(withLogs(ctx, err, hs, "server"))
 	}
-	srv := &jmap.Client{BaseURL: hostSetupBind, Token: m.key}
+	srv := setupClient(true, jmap.Client{BaseURL: hostSetupBind, Token: m.key})
 	if err := srv.HostListeners(ctx, hostFinalBind, m.local); err != nil {
 		return back(fmt.Errorf("fitting the server's listeners to the host: %w", err))
 	}
