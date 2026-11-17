@@ -10,13 +10,19 @@
 // on an error -- so a scheduled job turns a stale pin into a red run (and, with
 // --issue, an open issue) instead of a fresh install shipped stale.
 //
+// Caddy, pinned by the digest of its image on Docker Hub, is read from Docker
+// Hub's tags instead: it is behind when a newer X.Y.Z-alpine of its series is
+// there, or when its own version's tag now names another image (Docker Hub
+// rebuilds an image for a new Alpine under the same tag).
+//
 // It only reads; it never edits release.go. The move itself stays a reviewed
 // change: the report names the version to move to, and release.go's checksums
-// are still taken from each release's signed SHA256SUMS by hand.
+// are still taken from each release's signed SHA256SUMS by hand, and Caddy's
+// digest from its image index.
 //
 // Usage:
 //
-//	pin-check [--base-url URL] [--timeout D] [--issue]
+//	pin-check [--base-url URL] [--hub-url URL] [--timeout D] [--issue]
 //
 // GITEA_TOKEN, if set, authenticates the API reads (needed while the
 // repositories are private). --issue opens or updates a tracking issue in this
@@ -55,6 +61,7 @@ func components() []component {
 
 func main() {
 	baseURL := flag.String("base-url", "https://git.coffeylabs.org", "the Gitea base URL whose releases to read")
+	hubURL := flag.String("hub-url", "https://hub.docker.com", "the Docker Hub base URL whose caddy tags to read")
 	timeout := flag.Duration("timeout", 30*time.Second, "overall deadline for the API reads")
 	openIssue := flag.Bool("issue", false, "open or update a tracking issue in this repo when a pin is stale")
 	flag.Parse()
@@ -63,7 +70,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	code, err := run(ctx, http.DefaultClient, *baseURL, token, *openIssue)
+	code, err := run(ctx, http.DefaultClient, *baseURL, *hubURL, token, *openIssue)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pin-check: %v\n", err)
 		os.Exit(1)
@@ -71,8 +78,16 @@ func main() {
 	os.Exit(code)
 }
 
-func run(ctx context.Context, client *http.Client, baseURL, token string, openIssue bool) (int, error) {
+func run(ctx context.Context, client *http.Client, baseURL, hubURL, token string, openIssue bool) (int, error) {
 	var findings []pins.Finding
+	report := func(f pins.Finding, stale bool, name, current string) {
+		if stale {
+			findings = append(findings, f)
+			fmt.Printf("STALE  %-24s %s -> %s\n", name, f.Current, f.Latest)
+		} else {
+			fmt.Printf("ok     %-24s %s\n", name, current)
+		}
+	}
 	for _, c := range components() {
 		rels, err := fetchReleases(ctx, client, baseURL, token, c.repo)
 		if err != nil {
@@ -82,13 +97,13 @@ func run(ctx context.Context, client *http.Client, baseURL, token string, openIs
 		if err != nil {
 			return 0, err
 		}
-		if stale {
-			findings = append(findings, f)
-			fmt.Printf("STALE  %-24s %s -> %s\n", c.Name, f.Current, f.Latest)
-		} else {
-			fmt.Printf("ok     %-24s %s\n", c.Name, c.Current)
-		}
+		report(f, stale, c.Name, c.Current)
 	}
+	f, stale, err := checkCaddy(ctx, client, hubURL)
+	if err != nil {
+		return 0, fmt.Errorf("caddy: %w", err)
+	}
+	report(f, stale, caddyName, release.CaddyVersion)
 
 	if len(findings) == 0 {
 		fmt.Println("\nAll pins are current.")
@@ -96,7 +111,8 @@ func run(ctx context.Context, client *http.Client, baseURL, token string, openIs
 	}
 
 	fmt.Printf("\n%d pin(s) behind. Move release.go to the versions above, taking each\n", len(findings))
-	fmt.Println("checksum from that release's signed SHA256SUMS, and open a pull request.")
+	fmt.Println("checksum from that release's signed SHA256SUMS (Caddy's digest from its image index),")
+	fmt.Println("and open a pull request.")
 	if openIssue {
 		if token == "" {
 			return 0, fmt.Errorf("--issue needs GITEA_TOKEN")
@@ -185,7 +201,7 @@ func issueBody(findings []pins.Finding) string {
 	for _, f := range findings {
 		fmt.Fprintf(&b, "- **%s**: `%s` -> `%s`\n", f.Component, f.Current, f.Latest)
 	}
-	b.WriteString("\nMove each pin, taking its checksum from that release's signed `SHA256SUMS`, and open a pull request. This issue is maintained by `pin-check`; it updates itself and can be closed once the pins are current.\n")
+	b.WriteString("\nMove each pin, taking its checksum from that release's signed `SHA256SUMS` (Caddy's digest from its image index: `docker buildx imagetools inspect docker.io/library/caddy:<version>-alpine`), and open a pull request. This issue is maintained by `pin-check`; it updates itself and can be closed once the pins are current.\n")
 	return b.String()
 }
 
@@ -240,4 +256,50 @@ func apiWrite(ctx context.Context, client *http.Client, method, u, token string,
 		return fmt.Errorf("%s %s: %s", method, u, resp.Status)
 	}
 	return nil
+}
+
+const caddyName = "caddy (Docker Hub)"
+
+// hubTag is the slice of a Docker Hub tag the check needs.
+type hubTag struct {
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
+}
+
+// checkCaddy compares the Caddy pin with Docker Hub's caddy tags: a newer
+// X.Y.Z-alpine in the pin's series is a move, and so is the pin's own tag
+// naming an image other than the pinned digest, which is a rebuild.
+func checkCaddy(ctx context.Context, client *http.Client, hubURL string) (pins.Finding, bool, error) {
+	u := strings.TrimRight(hubURL, "/") + "/v2/repositories/library/caddy/tags?page_size=100&name=-alpine"
+	body, err := apiGet(ctx, client, u, "")
+	if err != nil {
+		return pins.Finding{}, false, err
+	}
+	var page struct {
+		Results []hubTag `json:"results"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		return pins.Finding{}, false, fmt.Errorf("decoding tags: %w", err)
+	}
+	var rels []pins.Release
+	rebuilt := ""
+	for _, t := range page.Results {
+		v, ok := strings.CutSuffix(t.Name, "-alpine")
+		if !ok {
+			continue
+		}
+		rels = append(rels, pins.Release{Tag: v})
+		if v == release.CaddyVersion && t.Digest != "" && t.Digest != release.CaddyDigest {
+			rebuilt = t.Digest
+		}
+	}
+	f, stale, err := pins.Check(pins.Component{Name: caddyName, Current: release.CaddyVersion}, rels)
+	if err != nil || stale {
+		return f, stale, err
+	}
+	if rebuilt != "" {
+		return pins.Finding{Component: caddyName, Current: release.CaddyVersion,
+			Latest: release.CaddyVersion + " rebuilt, now " + rebuilt}, true, nil
+	}
+	return pins.Finding{}, false, nil
 }
