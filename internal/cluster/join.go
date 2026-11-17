@@ -143,14 +143,14 @@ func BuildPlan(c Config) (*Plan, error) {
 	}
 	for _, s := range secs {
 		dst := c.secretPath(s.file)
-		if err := c.notALink(dst); err != nil {
-			return nil, err
-		}
 		if s.from == "" {
 			if _, err := os.Stat(dst); err != nil {
 				return nil, fmt.Errorf("%s is not at %s and no secret_from says where to install it from", s.what, dst)
 			}
-			continue // already in place, left as it is
+			continue // already in place, left as it is, and only the server reads it
+		}
+		if err := c.notALink(dst); err != nil {
+			return nil, err
 		}
 		if _, err := os.Stat(s.from); err != nil {
 			return nil, fmt.Errorf("%s: the source %s is not there", s.what, s.from)

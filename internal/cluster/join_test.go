@@ -342,3 +342,28 @@ func TestJoinGivesItsFilesToTheServersUser(t *testing.T) {
 		}
 	}
 }
+
+// A secret already in place that the join leaves alone may be a link the
+// operator made: only the server reads it, so it is not refused.
+func TestJoinLeavesALinkedSecretItDoesNotWrite(t *testing.T) {
+	node := clusterNode(t, t.TempDir())
+	cfg, _ := fixture(t, node)
+	kept := filepath.Join(t.TempDir(), "pg.pw")
+	if err := os.WriteFile(kept, []byte("pgpw"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(kept, filepath.Join(cfg.EtcDir, "pg.pw")); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Node.Store.SecretFrom = ""
+	p, err := BuildPlan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(filepath.Join(cfg.EtcDir, "pg.pw")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the operator's link should be left as it is: %v %v", fi, err)
+	}
+}
