@@ -23,9 +23,11 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -364,7 +366,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 		return nil, withLogs(ctx, err, srvLogs, "server")
 	}
 
-	bootClient := &jmap.Client{BaseURL: serverURL, Username: "admin", Password: bootPass}
+	bootClient := setupClient(onHost, jmap.Client{BaseURL: serverURL, Username: "admin", Password: bootPass})
 	if err := bootClient.CheckBootstrapMode(ctx); err != nil {
 		return nil, err
 	}
@@ -415,7 +417,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 			return res, err
 		}
 	}
-	adminBasic := &jmap.Client{BaseURL: serverURL, Username: admin.Username, Password: admin.Secret}
+	adminBasic := setupClient(onHost, jmap.Client{BaseURL: serverURL, Username: admin.Username, Password: admin.Secret})
 	var keyID, key string
 	if err := waitFor(ctx, log, "the server to come back configured", 120*time.Second, func(ctx context.Context) error {
 		var err error
@@ -424,7 +426,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	}); err != nil {
 		return res, withLogs(ctx, fmt.Errorf("an API key for the setup: %w", err), srvLogs, "server")
 	}
-	srv := &jmap.Client{BaseURL: serverURL, Token: key}
+	srv := setupClient(onHost, jmap.Client{BaseURL: serverURL, Token: key})
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
@@ -977,4 +979,54 @@ func setupOverride(name, content string) (string, func(), error) {
 		return "", nil, err
 	}
 	return path, cleanup, nil
+}
+
+// setupClient is a client for the server at a loopback address, carrying
+// the administrator's password or an API key. On the host those are ports
+// 8080 and 8081, which any local user may listen on while the installer
+// restarts the server: so before each request, whatever listens there must
+// be the server the unit started, or nothing is sent. In a container the
+// runtime publishes the port and nobody else can take it.
+//
+// The check is of the client's address at the time of each request, as
+// first boot moves its client from 8080 to 8081 once the listeners are
+// fitted.
+func setupClient(onHost bool, c jmap.Client) *jmap.Client {
+	cl := &c
+	if onHost {
+		cl.Guard = func(ctx context.Context) error { return serversOwnListener(ctx, cl.BaseURL) }
+	}
+	return cl
+}
+
+// serversOwnListener is nil when what listens on base's port is the host
+// server unit's main process.
+func serversOwnListener(ctx context.Context, base string) error {
+	u, err := url.Parse(base)
+	if err != nil {
+		return err
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		return fmt.Errorf("%s names no port", base)
+	}
+	pid := serverMainPID(ctx)
+	if pid <= 0 {
+		return fmt.Errorf("%s is not running", HostServerUnit)
+	}
+	if err := host.PortHeldBy(port, pid); err != nil {
+		return fmt.Errorf("%w; the mail server is pid %d, so nothing was sent there", err, pid)
+	}
+	return nil
+}
+
+// serverMainPID is the host server unit's main process, or 0; a variable so
+// a test can stand in for systemd.
+var serverMainPID = func(ctx context.Context) int {
+	out, err := exec.CommandContext(ctx, "systemctl", "show", "-p", "MainPID", "--value", HostServerUnit).Output()
+	if err != nil {
+		return 0
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return pid
 }
