@@ -7,8 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/topology"
@@ -224,5 +227,118 @@ func TestNoServerDir(t *testing.T) {
 	cfg := Config{Node: topology.ClusterNode{}, EtcDir: filepath.Join(t.TempDir(), "absent"), Unit: "u", UnitDir: "d"}
 	if _, err := BuildPlan(cfg); err == nil {
 		t.Error("a join before the server is installed should fail")
+	}
+}
+
+// victimFile is a file of root's outside the server's directory, which a
+// link planted in that directory points at.
+func victimFile(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "shadow")
+	if err := os.WriteFile(p, []byte("root:secret-hash\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func untouched(t *testing.T, path string) {
+	t.Helper()
+	if b, _ := os.ReadFile(path); string(b) != "root:secret-hash\n" {
+		t.Errorf("%s was written through a link: %q", path, b)
+	}
+}
+
+// The server's directory is its user's, so that user can replace config.json
+// or a secret with a symbolic link. A join runs as root and must neither
+// write through such a link nor copy what it points at into the rollback
+// copy (INSTALLER-1).
+func TestJoinRefusesLinksInTheServersDirectory(t *testing.T) {
+	for _, name := range []string{"config.json", "config.json.prev", "pg.pw"} {
+		t.Run(name, func(t *testing.T) {
+			cfg, _ := fixture(t, clusterNode(t, t.TempDir()))
+			victim := victimFile(t)
+			// A link to a file not there yet, for the one a join only
+			// writes when it is missing.
+			absent := filepath.Join(filepath.Dir(victim), "cron.d-x")
+			link := filepath.Join(cfg.EtcDir, name)
+			os.Remove(link)
+			target := victim
+			if name == "config.json.prev" {
+				target = absent
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			p, err := BuildPlan(cfg)
+			if err == nil {
+				err = Apply(context.Background(), p)
+			}
+			if err == nil || !strings.Contains(err.Error(), "symbolic link") {
+				t.Errorf("a link at %s should be refused, got %v", name, err)
+			}
+			untouched(t, victim)
+			if _, err := os.Stat(absent); err == nil {
+				t.Errorf("%s was created through a link", absent)
+			}
+			prev := cfg.configPath() + ".prev"
+			if fi, err := os.Lstat(prev); err == nil && fi.Mode().IsRegular() {
+				if b, _ := os.ReadFile(prev); strings.Contains(string(b), "secret-hash") {
+					t.Error("the rollback copy holds the link's target")
+				}
+			}
+		})
+	}
+}
+
+// A link swapped in after the plan was made, while the join runs, is
+// replaced, never written through.
+func TestJoinDoesNotWriteThroughALinkPlantedAfterThePlan(t *testing.T) {
+	cfg, _ := fixture(t, clusterNode(t, t.TempDir()))
+	p, err := BuildPlan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	victim := victimFile(t)
+	for _, name := range []string{"pg.pw", "nats.pw"} {
+		if err := os.Symlink(victim, filepath.Join(cfg.EtcDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Apply(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	untouched(t, victim)
+	for _, name := range []string{"pg.pw", "nats.pw"} {
+		fi, err := os.Lstat(filepath.Join(cfg.EtcDir, name))
+		if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o400 {
+			t.Errorf("%s should be a plain file, mode 0400: %v %v", name, fi, err)
+		}
+	}
+}
+
+// With the server's user named, what a join writes beside config.json is
+// given to it. The current user stands in for it, so this runs without root.
+func TestJoinGivesItsFilesToTheServersUser(t *testing.T) {
+	me, err := user.Current()
+	if err != nil {
+		t.Skip(err)
+	}
+	cfg, _ := fixture(t, clusterNode(t, t.TempDir()))
+	cfg.User = me.Username
+	p, err := BuildPlan(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"config.json", "config.json.prev", "pg.pw"} {
+		fi, err := os.Lstat(filepath.Join(cfg.EtcDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st := fi.Sys().(*syscall.Stat_t); strconv.Itoa(int(st.Uid)) != me.Uid {
+			t.Errorf("%s belongs to uid %d, want %s", name, st.Uid, me.Uid)
+		}
 	}
 }

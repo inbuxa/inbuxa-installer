@@ -108,3 +108,28 @@ func TestMovedContentsArriveAndLeaveTheStageEmpty(t *testing.T) {
 		t.Errorf("nothing to move is not an error: %v", err)
 	}
 }
+
+// config.json is in the server's home, which its user can write. A move runs
+// as root and must not read or write through a link planted there
+// (INSTALLER-1).
+func TestRewriteDataPathRefusesALink(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(t.TempDir(), "root.json")
+	body := `{"path":"/var/lib/inbuxa/x","secret":"root's"}`
+	if err := os.WriteFile(victim, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(dir, "config.json")
+	if err := os.Symlink(victim, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := rewriteDataPath(cfg, containerDataPath, "/var/lib/inbuxa/server/data/"); err == nil {
+		t.Error("a config.json that is a symbolic link should be refused")
+	}
+	if b, _ := os.ReadFile(victim); string(b) != body {
+		t.Errorf("written through the link: %s", b)
+	}
+	if err := copyFile(cfg, filepath.Join(dir, "staged.json"), 0o640); err == nil {
+		t.Error("copying a config.json that is a symbolic link should be refused")
+	}
+}

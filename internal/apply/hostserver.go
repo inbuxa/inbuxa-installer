@@ -27,6 +27,7 @@ package apply
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -122,15 +123,63 @@ func (h hostServer) Install(ctx context.Context) (replaced bool, err error) {
 	if err := os.Chmod(h.deploy, 0o711); err != nil {
 		return false, err
 	}
-	for _, d := range []string{h.home(), h.DataPath()} {
-		if err := os.MkdirAll(d, 0o750); err != nil {
-			return false, err
-		}
-		if err := runQuiet(ctx, "chown", HostServerUser+":"+HostServerUser, d); err != nil {
-			return false, err
-		}
+	if err := h.serverDirs(ctx); err != nil {
+		return false, err
 	}
 	return replaced, nil
+}
+
+// chownServer runs chown; a variable so a test can watch it without root.
+var chownServer = func(ctx context.Context, args ...string) error {
+	return runQuiet(ctx, "chown", args...)
+}
+
+// serverDirs makes the server's home and its data directory and gives them
+// to the server's user. The home is in the deployment directory, which is
+// root's, but data/ is in the home, which that user can write: something
+// running as it could have put a symbolic link there, and following the
+// link would give it whatever directory the link names. So a data/ that is
+// not a plain directory is refused, and chown is given -h and no trailing
+// slash, so a link swapped in after the check is what changes owner, not
+// what it points at.
+func (h hostServer) serverDirs(ctx context.Context) error {
+	for _, d := range []string{h.home(), filepath.Join(h.home(), "data")} {
+		if err := plainDir(d, 0o750); err != nil {
+			return err
+		}
+		if err := chownServer(ctx, "-h", HostServerUser+":"+HostServerUser, d); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// plainDir makes dir when it is not there, and refuses one that is a
+// symbolic link or not a directory at all.
+func plainDir(dir string, mode os.FileMode) error {
+	fi, err := os.Lstat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(dir, mode); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		fi, err = os.Lstat(dir)
+	}
+	if err != nil {
+		return err
+	}
+	return isPlainDir(dir, fi)
+}
+
+func isPlainDir(dir string, fi os.FileInfo) error {
+	switch {
+	case fi.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("%s is a symbolic link, where the installer keeps a directory of the server's; "+
+			"nothing was changed through it. Something running as %s may have put it there: look at where it points, "+
+			"then move it aside and run this again", dir, HostServerUser)
+	case !fi.IsDir():
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	return nil
 }
 
 func (h hostServer) fetchBinary(ctx context.Context) error {
