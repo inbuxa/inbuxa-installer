@@ -17,6 +17,9 @@ import (
 func rawMode(*os.File) (func(), error) { return nil, errors.New("not a Linux terminal") }
 func size(*os.File) (int, int)         { return 80, 24 }
 
+// NoEcho is never reached off Linux, where nothing is a terminal.
+func NoEcho(*os.File) (func(), error) { return nil, errors.New("not a Linux terminal") }
+
 // IsTerminal is false off Linux: the interface is never started there.
 func IsTerminal(*os.File) bool { return false }
 

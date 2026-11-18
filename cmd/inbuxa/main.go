@@ -499,12 +499,12 @@ func join(args []string) int {
 		return 2
 	}
 	if *key == "-" {
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-		if err != nil && line == "" {
-			fmt.Fprintln(os.Stderr, "reading the key from standard input: "+err.Error())
+		k, err := readKey(*key)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
 			return 2
 		}
-		*key = strings.TrimSpace(line)
+		*key = k
 	}
 	if *key == "" {
 		fmt.Fprintln(os.Stderr, "an API key is needed: make one in the console (your account, API keys) and pass it with --key or INBUXA_JOIN_KEY")
@@ -1178,12 +1178,12 @@ func certsCmd(args []string) int {
 		return 0
 	}
 	if *key == "-" {
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-		if err != nil && line == "" {
-			fmt.Fprintln(os.Stderr, "reading the key from standard input: "+err.Error())
+		k, err := readKey(*key)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
 			return 2
 		}
-		*key = strings.TrimSpace(line)
+		*key = k
 	}
 	if *key == "" {
 		fmt.Println("\nA new order needs an API key: make one in the console (your account, API keys), then")
@@ -1277,12 +1277,12 @@ func dnsCmd(args []string) int {
 	}
 
 	if *key == "-" {
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-		if err != nil && line == "" {
-			fmt.Fprintln(os.Stderr, "reading the key from standard input: "+err.Error())
+		k, err := readKey(*key)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
 			return 2
 		}
-		*key = strings.TrimSpace(line)
+		*key = k
 	}
 	if *key == "" {
 		fmt.Println("Reading the records live needs an API key: make one in the console (your account, API")
@@ -1536,7 +1536,7 @@ func relayInstall(ctx context.Context, args []string) int {
 	}
 	// Read before the plan, which needs to know whether there is one; a
 	// plan that then refuses has still read it, and forgets it.
-	t, err := readKey(*token)
+	t, err := readSecret(*token, "Relay token")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		return 2
@@ -1918,12 +1918,33 @@ func render(f host.Facts) string { return plan.SurveyText(f) }
 // readKey is an API key given as --key: "-" reads it from standard input,
 // so it stays out of the shell's history.
 func readKey(key string) (string, error) {
-	if key != "-" {
-		return key, nil
+	return readSecret(key, "API key")
+}
+
+// readSecret is a --key or --token value: as given, or, for "-", one line of
+// standard input. On a terminal it says it's waiting and doesn't echo what's
+// pasted (#75); piped input is read as it comes.
+func readSecret(value, what string) (string, error) {
+	if value != "-" {
+		return value, nil
 	}
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if tui.IsTerminal(os.Stdin) {
+		fmt.Fprintf(os.Stderr, "%s (paste it and press Enter): ", what)
+		// The newline still echoes, so the next output starts on a line of
+		// its own.
+		if restore, err := tui.NoEcho(os.Stdin); err == nil {
+			defer restore()
+		}
+	}
+	return readSecretLine(os.Stdin, what)
+}
+
+// readSecretLine reads the first line of r, without its line ending.
+func readSecretLine(r io.Reader, what string) (string, error) {
+	line, err := bufio.NewReader(r).ReadString('\n')
 	if err != nil && line == "" {
-		return "", fmt.Errorf("reading the key from standard input: %w", err)
+		f := strings.Fields(what)
+		return "", fmt.Errorf("reading the %s from standard input: %w", strings.ToLower(f[len(f)-1]), err)
 	}
 	return strings.TrimSpace(line), nil
 }
