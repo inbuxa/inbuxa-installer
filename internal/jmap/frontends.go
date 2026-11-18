@@ -39,6 +39,9 @@ func (c *Client) AccountID(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := c.guard(ctx); err != nil {
+		return "", err
+	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	} else {

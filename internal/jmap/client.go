@@ -36,6 +36,9 @@ type Client struct {
 	// /jmap (contract C-23), so a configured server takes an API key only.
 	Token string
 	HTTP  *http.Client
+	// Guard, when set, is asked before every request: an error from it
+	// stops the request before any credential is sent.
+	Guard func(context.Context) error
 }
 
 // Call is one method call in a request.
@@ -77,6 +80,13 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("HTTP %d: %s", e.Status, strings.TrimSpace(e.Body))
 }
 
+func (c *Client) guard(ctx context.Context) error {
+	if c.Guard == nil {
+		return nil
+	}
+	return c.Guard(ctx)
+}
+
 func (c *Client) httpClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
@@ -103,6 +113,9 @@ func (c *Client) do(ctx context.Context, using []string, calls ...Call) ([]Respo
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/jmap/", bytes.NewReader(body))
 	if err != nil {
+		return nil, err
+	}
+	if err := c.guard(ctx); err != nil {
 		return nil, err
 	}
 	if c.Token != "" {
