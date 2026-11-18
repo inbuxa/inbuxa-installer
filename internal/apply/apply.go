@@ -17,6 +17,7 @@
 package apply
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -232,15 +233,21 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	log.Step("writing the deployment into %s", dir)
 	var sec compose.Secrets
 	var err error
+	caddyChanged := false
 	if stack.Empty() {
 		if sec, err = compose.EnsureSecrets(dir); err != nil {
 			return nil, err
 		}
 		log.Info(".env (nothing runs in containers here)")
 	} else {
+		// Caddy reads its file at start only, and a rewritten bind-mounted
+		// file doesn't make compose recreate it: what changed is reloaded below.
+		before, _ := os.ReadFile(filepath.Join(dir, "Caddyfile"))
 		if sec, err = compose.Write(dir, &stack); err != nil {
 			return nil, err
 		}
+		after, _ := os.ReadFile(filepath.Join(dir, "Caddyfile"))
+		caddyChanged = stack.Proxy && len(before) > 0 && !bytes.Equal(before, after)
 		log.Info("compose.yaml, .env%s", map[bool]string{true: " and Caddyfile", false: ""}[stack.Proxy])
 	}
 
@@ -337,6 +344,17 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 			log.Info("your web server still terminates TLS for the server's names: run this again with --key to pass them through to it instead (#48)")
 		}
 		res, err := converge(ctx, o, stack, cmp, hs, serverChanged, existing, f, log)
+		if err == nil && caddyChanged {
+			// New names, or a front end added or taken off: without this
+			// Caddy kept serving, and certifying, the old ones.
+			log.Step("reloading the proxy for its new configuration")
+			if rerr := cmp.Run(ctx, "exec", "-T", "caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"); rerr != nil {
+				log.Info("caddy reload didn't take (%v); restarting it", rerr)
+				if rerr := cmp.Run(ctx, "restart", "caddy"); rerr != nil {
+					return res, fmt.Errorf("restarting the proxy for its new configuration: %w", rerr)
+				}
+			}
+		}
 		// An install from before #70 has no log files; a run with a key
 		// gives it them, and after a move points them at this shape's
 		// directory.
