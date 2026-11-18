@@ -37,6 +37,25 @@ func rawMode(f *os.File) (restore func(), err error) {
 	}, nil
 }
 
+// NoEcho turns off echo on the terminal f, keeping line editing and Ctrl-C,
+// so a pasted secret isn't shown, and returns how to put it back.
+func NoEcho(f *os.File) (restore func(), err error) {
+	fd := f.Fd()
+	var old syscall.Termios
+	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCGETS, uintptr(unsafe.Pointer(&old))); e != 0 {
+		return nil, e
+	}
+	quiet := old
+	quiet.Lflag &^= syscall.ECHO
+	quiet.Lflag |= syscall.ECHONL
+	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCSETS, uintptr(unsafe.Pointer(&quiet))); e != 0 {
+		return nil, e
+	}
+	return func() {
+		syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCSETS, uintptr(unsafe.Pointer(&old)))
+	}, nil
+}
+
 // size is the terminal's width and height in cells.
 func size(f *os.File) (w, h int) {
 	var ws struct{ Row, Col, X, Y uint16 }

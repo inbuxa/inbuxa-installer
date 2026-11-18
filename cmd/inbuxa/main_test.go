@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -54,5 +55,24 @@ func TestDNSTakesItsFlags(t *testing.T) {
 	}
 	if code := dnsCmd([]string{"--bogus"}); code != 2 {
 		t.Errorf("an unknown option was accepted: %d", code)
+	}
+}
+
+// "--key -" with piped input reads the first line as it comes, prompts for
+// nothing, and says which secret it couldn't read (#75).
+func TestReadSecretLine(t *testing.T) {
+	got, err := readSecretLine(strings.NewReader("  abc123 \nsecond\n"), "API key")
+	if err != nil || got != "abc123" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if got, err := readSecretLine(strings.NewReader("nonewline"), "API key"); err != nil || got != "nonewline" {
+		t.Fatalf("no newline: got %q, %v", got, err)
+	}
+	_, err = readSecretLine(strings.NewReader(""), "Relay token")
+	if err == nil || !strings.Contains(err.Error(), "reading the token from standard input") {
+		t.Fatalf("empty input: %v", err)
+	}
+	if got, err := readSecret("given", "API key"); err != nil || got != "given" {
+		t.Fatalf("a value other than - is used as given: %q, %v", got, err)
 	}
 }
