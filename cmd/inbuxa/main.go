@@ -1254,6 +1254,10 @@ func dnsCmd(args []string) int {
 			if len(b) > 0 && b[len(b)-1] != '\n' {
 				fmt.Println()
 			}
+			if !apply.ZoneNamesHost(string(b), st.MailHost) {
+				fmt.Println("\n" + apply.StaleZoneHint(st.MailHost, false))
+				return 0
+			}
 			fmt.Println("\nTo re-read them live from the server (a rotated DKIM key, say):")
 			fmt.Println("  inbuxa dns --refresh --key -")
 			return 0
@@ -1293,6 +1297,9 @@ func dnsCmd(args []string) int {
 	fmt.Print(zone)
 	if len(zone) > 0 && zone[len(zone)-1] != '\n' {
 		fmt.Println()
+	}
+	if !apply.ZoneNamesHost(zone, st.MailHost) {
+		fmt.Println("\n" + apply.StaleZoneHint(st.MailHost, true))
 	}
 	// Keep the saved copy in step with what the server now says.
 	if err := os.WriteFile(zoneFile, []byte(zone), 0o644); err == nil {
