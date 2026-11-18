@@ -12,7 +12,7 @@ package release
 import "fmt"
 
 // ServerVersion is the inbuxa-server release this installer installs.
-const ServerVersion = "2026.11.11"
+const ServerVersion = "2026.11.18"
 
 // ServerImage is that release as a container image.
 const ServerImage = "registry.coffeylabs.org/inbuxa/inbuxa-server:" + ServerVersion
@@ -40,8 +40,8 @@ const CaddyImage = "docker.io/library/caddy@" + CaddyDigest
 // rather than fetched beside the download: a checksum that arrives with the
 // file only proves the file arrived.
 var ServerSHA256 = map[string]string{
-	"amd64": "0602618ab7cc55f34f870119b8c7fabe9305db41a6f7be76ad52827f7735bc08",
-	"arm64": "aa705533ea71c0009c03c793783bcc3f6ac2ada1acc5b4a888bc7ad2ef1f0ab7",
+	"amd64": "e775e37a1a859c044ebc71761dd452a5914b49a32a44eeff06aac8dee3ca3518",
+	"arm64": "705de8382bf211529f34ffee14fd04544d5c88b00f84783240a465abe748931f",
 }
 
 // ServerTarball is where the release's tarball for an architecture is.
