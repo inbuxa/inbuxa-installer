@@ -31,6 +31,8 @@ type Found struct {
 	Dir         string            // the deployment directory, when there is one
 	Domain      string            // read back from the deployment
 	MailHost    string            //
+	ConsoleHost string            // the console's name, from the address the server is given for it
+	WebmailHost string            // the webmail's, the same way
 	Services    map[string]string // component -> running|stopped|absent
 	Compose     []string          // services the compose file declares
 	Runtime     string            // what is running them
@@ -71,6 +73,26 @@ var Dirs = []string{"/var/lib/inbuxa", "/opt/inbuxa"}
 var serviceLine = regexp.MustCompile(`(?m)^  ([a-z][a-z0-9_-]*):\s*$`)
 var hostnameLine = regexp.MustCompile(`(?m)^\s+hostname:\s*(\S+)\s*$`)
 
+// The front ends' addresses, as the server is given them: a key in the
+// compose file's environment, or a line in server.env for a server on the host.
+var (
+	adminURLLine   = regexp.MustCompile(`(?m)^\s*INBUXA_ADMIN_URL\s*[:=]\s*"?https://([^\s/":]+)`)
+	webmailURLLine = regexp.MustCompile(`(?m)^\s*INBUXA_WEBMAIL_URL\s*[:=]\s*"?https://([^\s/":]+)`)
+)
+
+// FrontEndHosts reads the console's and the webmail's names out of a
+// compose file or server.env. Plain-HTTP addresses (a --local install) give
+// nothing: they are loopback binds, not names.
+func FrontEndHosts(text string) (console, webmail string) {
+	if m := adminURLLine.FindStringSubmatch(text); m != nil {
+		console = m[1]
+	}
+	if m := webmailURLLine.FindStringSubmatch(text); m != nil {
+		webmail = m[1]
+	}
+	return console, webmail
+}
+
 // Run looks for a deployment and reports what it finds. It never changes
 // anything, and a machine with nothing on it is not an error.
 func Run(ctx context.Context, f host.Facts, dirs ...string) Found {
@@ -107,12 +129,19 @@ func Run(ctx context.Context, f host.Facts, dirs ...string) Found {
 		found.Services["console"] = "running"
 	}
 
+	if b, err := os.ReadFile(filepath.Join(found.Dir, "server.env")); err == nil {
+		found.ConsoleHost, found.WebmailHost = FrontEndHosts(string(b))
+	}
+
 	b, err := os.ReadFile(filepath.Join(found.Dir, "compose.yaml"))
 	if err != nil {
 		// A server on the host with nothing beside it has no compose file.
 		return found
 	}
 	text := string(b)
+	if c, w := FrontEndHosts(text); c != "" || w != "" {
+		found.ConsoleHost, found.WebmailHost = c, w
+	}
 	for _, m := range serviceLine.FindAllStringSubmatch(text, -1) {
 		name := m[1]
 		if name == "caddy" {

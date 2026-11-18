@@ -88,7 +88,7 @@ const usage = `inbuxa -- install the inbuxa suite on this machine
   inbuxa man                 the manual page, in roff (inbuxa man > inbuxa.1)
   inbuxa version             this program's version
 
-install flags:
+install flags (run again where it is installed, any not given are the install's own):
   --domain NAME              the mail domain (required unless --local)
   --mail-host NAME           default: mail.DOMAIN
   --console-host NAME        default: admin.DOMAIN
@@ -352,9 +352,9 @@ func install(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	set := map[string]bool{}
+	fs.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
 	if *answers != "" {
-		set := map[string]bool{}
-		fs.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
 		b, err := os.ReadFile(*answers)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "reading --answers: "+err.Error())
@@ -366,6 +366,16 @@ func install(args []string) int {
 			return 2
 		}
 		applyAnswers(a, set, &o, server, console, webmail)
+		for _, k := range answerKeys(a) {
+			set[k] = true
+		}
+	}
+	f := host.Survey(context.Background())
+	// Running it again on an installed machine changes only what it is given (#84).
+	var from []inherited
+	if st, err := state.Load(); err == nil && st.Installed() {
+		found := discover.Run(context.Background(), f, st.Dir)
+		from = inherit(st, found, set, &o, shapePtrs{server, console, webmail})
 	}
 	for _, c := range []struct {
 		comp plan.Component
@@ -379,12 +389,14 @@ func install(args []string) int {
 		o.Choices = append(o.Choices, plan.Choice{Component: c.comp, Shape: s})
 	}
 
-	f := host.Survey(context.Background())
 	p, err := plan.Build(f, o)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "cannot install as asked: "+err.Error())
 		fmt.Fprint(os.Stderr, "\n"+render(f))
 		return 1
+	}
+	if len(from) > 0 {
+		fmt.Print(inheritedText(from))
 	}
 	fmt.Print(p.String())
 	moving := false
