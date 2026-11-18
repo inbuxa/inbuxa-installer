@@ -212,44 +212,125 @@ type CertsOptions struct {
 	ACMEDirectory string
 }
 
+// orderPlan is how Renew gets the mail host a certificate: which domain it
+// orders on, and what it does to that domain first.
+type orderPlan struct {
+	Action     string // retry, set (these names on this account), add (a certificate-only domain, then set), enable (ACME on the install's domain)
+	DomainID   string // empty for add
+	DomainName string
+	ProviderID string
+	Names      []string // for set and add; empty means the server's default set
+}
+
+// planOrder picks the domain whose certificate is to name host (#82). The
+// server orders one certificate per domain, and a domain's default set of
+// names includes the server's own hostname only when it is inside that
+// domain. So a mail host on another domain from the install's needs that
+// other domain's certificate to name it: the one the server has, or one
+// added for certificates only, as the console's Order a certificate does,
+// on the install's ACME account.
+func planOrder(domains []jmap.DomainCert, installDomain, host, serverName string) (orderPlan, error) {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	var install, cover *jmap.DomainCert
+	for i := range domains {
+		d := &domains[i]
+		name := strings.ToLower(d.Name)
+		if strings.EqualFold(d.Name, installDomain) {
+			install = d
+		}
+		if (host == name || strings.HasSuffix(host, "."+name)) && (cover == nil || len(name) > len(cover.Name)) {
+			cover = d
+		}
+	}
+	if install == nil {
+		return orderPlan{}, fmt.Errorf("domain %s does not exist on this server", installDomain)
+	}
+	if cover == nil {
+		parent := host[strings.Index(host, ".")+1:]
+		if !strings.Contains(host, ".") || !strings.Contains(parent, ".") {
+			return orderPlan{}, fmt.Errorf("%s isn't a name a certificate can be ordered for", host)
+		}
+		if install.Kind != "Automatic" || install.ProviderID == "" {
+			return orderPlan{}, fmt.Errorf("%s is on another domain, and %s has no ACME account yet to order with: run `inbuxa certs` without --mail-host first, or order it in the console (Settings, Security, Certificates)", host, installDomain)
+		}
+		return orderPlan{Action: "add", DomainName: parent, ProviderID: install.ProviderID, Names: []string{host}}, nil
+	}
+	if cover.Kind != "Automatic" || cover.ProviderID == "" {
+		if cover == install {
+			return orderPlan{Action: "enable", DomainID: install.ID, DomainName: install.Name}, nil
+		}
+		if install.Kind != "Automatic" || install.ProviderID == "" {
+			return orderPlan{}, fmt.Errorf("neither %s nor %s orders certificates from ACME yet: order one for %s in the console (Settings, Security, Certificates)", cover.Name, installDomain, host)
+		}
+		return orderPlan{Action: "set", DomainID: cover.ID, DomainName: cover.Name, ProviderID: install.ProviderID, Names: []string{host}}, nil
+	}
+	if len(cover.Names) == 0 {
+		// The default set: it names the server's hostname, and only that one.
+		if serverName != "" && !strings.EqualFold(strings.TrimSuffix(serverName, "."), host) {
+			return orderPlan{}, fmt.Errorf("the server's hostname is %s, so %s's certificate names that, not %s: set the hostname to %s in the console (Settings, Network, General), then run this again", serverName, cover.Name, host, host)
+		}
+		return orderPlan{Action: "retry", DomainID: cover.ID, DomainName: cover.Name}, nil
+	}
+	for _, n := range cover.Names {
+		if strings.EqualFold(strings.TrimSuffix(n, "."), host) {
+			return orderPlan{Action: "retry", DomainID: cover.ID, DomainName: cover.Name}, nil
+		}
+	}
+	return orderPlan{Action: "set", DomainID: cover.ID, DomainName: cover.Name, ProviderID: cover.ProviderID, Names: append(append([]string{}, cover.Names...), host)}, nil
+}
+
 // Renew gets the server a certificate: a new order on ACME, or ACME turned
 // on first where something here can pass its challenges. It returns what the
 // mail ports present afterwards.
 func Renew(ctx context.Context, st *state.State, o CertsOptions, log Log) (*Served, error) {
 	srv := &jmap.Client{BaseURL: "http://" + hostFinalBind, Token: o.Key}
-	domainID, err := srv.DomainID(ctx, st.Domain)
+	domains, err := srv.DomainCerts(ctx)
 	if err != nil {
 		var he *jmap.HTTPError
 		if errors.As(err, &he) && (he.Status == 401 || he.Status == 403) {
 			return nil, ErrKeyRefused
 		}
-		return nil, fmt.Errorf("finding %s on the server: %w", st.Domain, err)
+		return nil, fmt.Errorf("reading the server's domains: %w", err)
 	}
-	kind, _, err := srv.CertificateManagement(ctx, domainID)
+	serverName, _ := srv.ServerName(ctx) // only sharpens the advice when it can be read
+	op, err := planOrder(domains, st.Domain, o.MailHost, serverName)
 	if err != nil {
 		return nil, err
 	}
-	if kind == "Automatic" {
+	if op.Action != "retry" && o.Proxy == "" {
+		return nil, fmt.Errorf("nothing here passes the server's ACME challenges on port 80 "+
+			"(the install has no proxy): the certificate for %s is yours to arrange", o.MailHost)
+	}
+	if o.Proxy == "snippets" && op.Action != "retry" {
+		log.Info("the challenges reach the server through your web server, so it must be loading %s first",
+			filepath.Join(st.Dir, "proxy"))
+	}
+	domainID := op.DomainID
+	switch op.Action {
+	case "retry":
 		log.Step("starting a new certificate order for %s", o.MailHost)
 		if err := srv.RetryCertificates(ctx, domainID); err != nil {
 			return nil, err
 		}
-	} else {
-		if o.Proxy == "" {
-			return nil, fmt.Errorf("the domain's certificates are %s, and nothing here passes the server's ACME challenges on port 80 "+
-				"(the install has no proxy): its certificate is yours to arrange", strings.ToLower(kind))
-		}
+	case "enable":
 		email := o.Email
 		if email == "" {
 			email = "postmaster@" + st.Domain
 		}
 		log.Step("turning on certificates for %s, from ACME (contact %s)", o.MailHost, email)
-		if o.Proxy == "snippets" {
-			log.Info("the challenges reach the server through your web server, so it must be loading %s first",
-				filepath.Join(st.Dir, "proxy"))
-		}
 		if _, err := srv.EnableACME(ctx, domainID, o.ACMEDirectory, email); err != nil {
 			return nil, fmt.Errorf("enabling ACME: %w", err)
+		}
+	case "add", "set":
+		if op.Action == "add" {
+			log.Step("adding %s to the server for certificates only (no DKIM keys, nothing published)", op.DomainName)
+			if domainID, err = srv.AddCertificateDomain(ctx, op.DomainName); err != nil {
+				return nil, fmt.Errorf("adding %s: %w", op.DomainName, err)
+			}
+		}
+		log.Step("ordering a certificate for %s on %s (%s)", o.MailHost, op.DomainName, strings.Join(op.Names, ", "))
+		if err := srv.SetCertificates(ctx, domainID, op.ProviderID, op.Names); err != nil {
+			return nil, err
 		}
 	}
 	// Waited for as the mail ports present it, not as the server lists it:

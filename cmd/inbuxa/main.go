@@ -1191,6 +1191,13 @@ func certsCmd(args []string) int {
 		fmt.Println("and paste it, or set INBUXA_API_KEY. It isn't kept.")
 		return 1
 	}
+	// The managed Caddy forwards the challenges only for the names it was
+	// installed with: a mail host it doesn't serve can't be validated (#82).
+	if o.Proxy == "caddy" && found.MailHost != "" && !strings.EqualFold(found.MailHost, o.MailHost) {
+		fmt.Printf("\nThe proxy here serves %s, not %s, so the order can't be validated. Move the install to\n", found.MailHost, o.MailHost)
+		fmt.Printf("the new name first:\n  sudo inbuxa install --mail-host %s --dry-run\n", o.MailHost)
+		return 1
+	}
 	fmt.Println()
 	o.Key = *key
 	if _, err := apply.Renew(ctx, st, o, &printer{}); err != nil {

@@ -177,7 +177,12 @@ This is early. What is built:
   because DNS wasn't in place during the install -- or, on a domain not yet
   on ACME, ACME turned on where the managed Caddy or your own web server
   passes the challenges. It waits for the mail ports to present the new
-  certificate. The console's and the webmail's certificates are the
+  certificate. A mail host on another domain from the install's gets its
+  certificate on that domain: the server's own, or one added for
+  certificates only (no DKIM keys, nothing published), as the console's
+  Order a certificate does, on the install's ACME account. A domain's
+  default certificate names the server's hostname, so if that is still an
+  old name it says where to change it first. The console's and the webmail's certificates are the
   proxy's, which renews them itself.
 
 - **`status`** -- what is installed, what is running, and where those two

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -211,18 +212,36 @@ func (c *Client) CertificateManagement(ctx context.Context, domainID string) (ki
 
 // RetryCertificates starts a fresh ACME order for the domain. A failed order
 // is not retried on a restart; moving the domain to manual and straight back
-// is what starts a new one.
+// is what starts a new one. The names the domain's certificate covers are
+// kept: names entered in the console stay, and an empty set stays the
+// server's default one.
 func (c *Client) RetryCertificates(ctx context.Context, domainID string) error {
-	kind, providerID, err := c.CertificateManagement(ctx, domainID)
+	d, err := c.domainCerts(ctx, []string{domainID})
 	if err != nil {
 		return err
 	}
-	if kind != "Automatic" || providerID == "" {
-		return fmt.Errorf("the domain's certificates are %q, not managed by ACME", kind)
+	if len(d) != 1 {
+		return errors.New("x:Domain/get did not return the domain")
 	}
+	if d[0].Kind != "Automatic" || d[0].ProviderID == "" {
+		return fmt.Errorf("the domain's certificates are %q, not managed by ACME", d[0].Kind)
+	}
+	return c.SetCertificates(ctx, domainID, d[0].ProviderID, d[0].Names)
+}
+
+// SetCertificates puts the domain's certificates on the ACME account with
+// exactly these names (none: the server's default set), and starts an order
+// for them by moving it to manual and straight back.
+func (c *Client) SetCertificates(ctx context.Context, domainID, providerID string, names []string) error {
+	auto := automaticCertificates(providerID)
+	sans := map[string]bool{}
+	for _, n := range names {
+		sans[n] = true
+	}
+	auto["certificateManagement"].(map[string]any)["subjectAlternativeNames"] = sans
 	rs, err := c.Do(ctx,
 		Call{"x:Domain/set", map[string]any{"update": map[string]any{domainID: map[string]any{"certificateManagement": map[string]any{"@type": "Manual"}}}}, "0"},
-		Call{"x:Domain/set", map[string]any{"update": map[string]any{domainID: automaticCertificates(providerID)}}, "1"},
+		Call{"x:Domain/set", map[string]any{"update": map[string]any{domainID: auto}}, "1"},
 	)
 	if err != nil {
 		return err
@@ -243,6 +262,95 @@ func automaticCertificates(providerID string) map[string]any {
 		// autodiscover, mta-sts and ua-auto-config under the domain.
 		"subjectAlternativeNames": map[string]bool{},
 	}}
+}
+
+// DomainCert is a domain and how its certificates are managed.
+type DomainCert struct {
+	ID, Name   string
+	Kind       string   // Automatic or Manual
+	ProviderID string   // the ACME account, when Automatic
+	Names      []string // the names its certificate covers; empty is the server's default set
+}
+
+// DomainCerts lists every domain with its certificate management.
+func (c *Client) DomainCerts(ctx context.Context) ([]DomainCert, error) {
+	return c.domainCerts(ctx, nil)
+}
+
+func (c *Client) domainCerts(ctx context.Context, ids []string) ([]DomainCert, error) {
+	args := map[string]any{"properties": []string{"name", "certificateManagement"}}
+	if ids != nil {
+		args["ids"] = ids
+	} else {
+		args["ids"] = nil
+	}
+	rs, err := c.Do(ctx, Call{"x:Domain/get", args, "0"})
+	if err != nil {
+		return nil, err
+	}
+	var got struct {
+		List []struct {
+			ID                    string `json:"id"`
+			Name                  string `json:"name"`
+			CertificateManagement struct {
+				Type                    string          `json:"@type"`
+				AcmeProviderID          string          `json:"acmeProviderId"`
+				SubjectAlternativeNames map[string]bool `json:"subjectAlternativeNames"`
+			} `json:"certificateManagement"`
+		} `json:"list"`
+	}
+	if err := json.Unmarshal(rs[0].Args, &got); err != nil {
+		return nil, err
+	}
+	out := make([]DomainCert, 0, len(got.List))
+	for _, d := range got.List {
+		cm := d.CertificateManagement
+		dc := DomainCert{ID: d.ID, Name: d.Name, Kind: cm.Type, ProviderID: cm.AcmeProviderID}
+		for n := range cm.SubjectAlternativeNames {
+			dc.Names = append(dc.Names, n)
+		}
+		sort.Strings(dc.Names)
+		out = append(out, dc)
+	}
+	return out, nil
+}
+
+// AddCertificateDomain adds a domain that is there only for certificates,
+// as the console's Order a certificate does: no DKIM keys, nothing published.
+func (c *Client) AddCertificateDomain(ctx context.Context, name string) (string, error) {
+	rs, err := c.Do(ctx, Call{"x:Domain/set", map[string]any{"create": map[string]any{"d": map[string]any{
+		"name":                  name,
+		"description":           "Added for certificates",
+		"dkimManagement":        map[string]any{"@type": "Manual"},
+		"dnsManagement":         map[string]any{"@type": "Manual"},
+		"certificateManagement": map[string]any{"@type": "Manual"},
+	}}}, "0"})
+	if err != nil {
+		return "", err
+	}
+	s, err := DecodeSet(rs[0])
+	if err != nil {
+		return "", err
+	}
+	return CreatedID(s, "d")
+}
+
+// ServerName is the server's own hostname, which a domain's default
+// certificate names include only when it is inside that domain.
+func (c *Client) ServerName(ctx context.Context) (string, error) {
+	rs, err := c.Do(ctx, Call{"x:SystemSettings/get", map[string]any{"ids": []string{"singleton"}, "properties": []string{"defaultHostname"}}, "0"})
+	if err != nil {
+		return "", err
+	}
+	var got struct {
+		List []struct {
+			DefaultHostname string `json:"defaultHostname"`
+		} `json:"list"`
+	}
+	if err := json.Unmarshal(rs[0].Args, &got); err != nil || len(got.List) != 1 {
+		return "", errors.New("x:SystemSettings/get did not return the settings")
+	}
+	return got.List[0].DefaultHostname, nil
 }
 
 // Certificate is what the tool reports about an issued certificate.
