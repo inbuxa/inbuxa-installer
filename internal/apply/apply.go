@@ -671,6 +671,7 @@ func Run(ctx context.Context, p plan.Plan, f host.Facts, log Log) (*Result, erro
 	if err == nil {
 		st.Machine, st.Dir, st.Domain, st.MailHost, st.Local = o.Machine, dir, o.Domain, o.MailHost, o.Local
 		st.Runtime, st.Topology = f.Runtime.Kind, o.TopologyPath
+		recordOptions(st, o)
 		st.PassThrough = stack.PassThrough
 		st.LogFiles = logFiles
 		st.Shapes = map[string]string{}
@@ -864,9 +865,17 @@ func convergeHost(ctx context.Context, o plan.Options, stack compose.Stack, cmp 
 	return res, nil
 }
 
+// recordOptions writes down the options the state has no other field for,
+// so a later install starts from them (#84).
+func recordOptions(st *state.State, o plan.Options) {
+	st.Proxy, st.ConsoleHost, st.WebmailHost = o.Proxy, o.ConsoleHost, o.WebmailHost
+	st.ACMEEmail, st.ACMEDirectory, st.ACMECARoot = o.ACMEEmail, o.ACMEDirectory, o.ACMECARoot
+}
+
 func saveState(st *state.State, o plan.Options, f host.Facts, log Log) {
 	st.Machine, st.Dir, st.Domain, st.MailHost, st.Local = o.Machine, o.Dir, o.Domain, o.MailHost, o.Local
 	st.Runtime, st.Topology = f.Runtime.Kind, o.TopologyPath
+	recordOptions(st, o)
 	st.Installer = "server " + release.ServerVersion
 	st.RemovedAt = nil // installed again, on what was kept
 	st.Shapes = map[string]string{}

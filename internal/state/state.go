@@ -25,18 +25,27 @@ const Path = "/etc/inbuxa/install.json"
 
 // State is the file.
 type State struct {
-	Version   int               `json:"version"`
-	Machine   string            `json:"machine"`             // its name in the topology
-	Dir       string            `json:"dir"`                 // the deployment directory
-	Runtime   string            `json:"runtime,omitempty"`   // docker or podman
-	Domain    string            `json:"domain,omitempty"`    //
-	MailHost  string            `json:"mailHost,omitempty"`  // the server's name; installs before 2026.10.13 did not record it
-	Local     bool              `json:"local,omitempty"`     // --local: loopback only, no certificates
-	Shapes    map[string]string `json:"shapes"`              // component -> container|host
-	Topology  string            `json:"topology,omitempty"`  // the file this came from, if any
-	ServerURL string            `json:"serverUrl,omitempty"` // the server on another machine these front ends were joined to
-	Updated   time.Time         `json:"updated"`             //
-	Installer string            `json:"installer,omitempty"` // the version that wrote this
+	Version  int               `json:"version"`
+	Machine  string            `json:"machine"`            // its name in the topology
+	Dir      string            `json:"dir"`                // the deployment directory
+	Runtime  string            `json:"runtime,omitempty"`  // docker or podman
+	Domain   string            `json:"domain,omitempty"`   //
+	MailHost string            `json:"mailHost,omitempty"` // the server's name; installs before 2026.10.13 did not record it
+	Local    bool              `json:"local,omitempty"`    // --local: loopback only, no certificates
+	Shapes   map[string]string `json:"shapes"`             // component -> container|host
+	// The rest of the install's options, so running install again changes
+	// only what it is given (#84). Installs before 2026.11.18 did not record
+	// them; install reads them back from the machine instead.
+	Proxy         string    `json:"proxy,omitempty"`         // caddy | snippets | none
+	ConsoleHost   string    `json:"consoleHost,omitempty"`   //
+	WebmailHost   string    `json:"webmailHost,omitempty"`   //
+	ACMEEmail     string    `json:"acmeEmail,omitempty"`     //
+	ACMEDirectory string    `json:"acmeDirectory,omitempty"` // a private ACME CA, when one was given
+	ACMECARoot    string    `json:"acmeCaRoot,omitempty"`    // that CA's root
+	Topology      string    `json:"topology,omitempty"`      // the file this came from, if any
+	ServerURL     string    `json:"serverUrl,omitempty"`     // the server on another machine these front ends were joined to
+	Updated       time.Time `json:"updated"`                 //
+	Installer     string    `json:"installer,omitempty"`     // the version that wrote this
 
 	// PassThrough is whether the server's HTTPS listener was fitted to the
 	// name router --proxy snippets writes for nginx (#48). Installs from

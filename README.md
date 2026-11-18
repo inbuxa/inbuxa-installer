@@ -153,10 +153,20 @@ This is early. What is built:
   the console's and the webmail's files, the webmail's user, its Node. The
   data stays -- the server's volumes or directory, Caddy's certificates, the
   credentials and secrets -- with the install record marked removed, so
-  `install` run again with the same options brings it all back. `--purge`
+  `install` run again brings it all back. `--purge`
   removes the data too, all but `<dir>/backups`, which it names for you to
   delete. Docker, and the configuration your own web server loads, are left
   alone. To take one component off, run `install` again with it skipped.
+
+- **Running `install` again** -- on a machine with an install recorded,
+  every option not given on the command line or in `--answers` is the
+  install's own: its shapes, its proxy, its names, its directory and ACME
+  settings. So a run changes only what it is given (`install --mail-host
+  NAME` renames, `install --webmail skip` takes the webmail off, `install
+  --webmail container` puts it back), and the plan lists what it took from
+  the install. A component the install doesn't have stays off until it is
+  asked for. Installs made before 2026.11.18 didn't record the proxy or
+  the front ends' names; those are read back from the deployment.
 
 - **`certs [--key KEY]`** -- the mail server's own certificate, the one its
   mail ports present: who issued it, until when, for which names, whether
