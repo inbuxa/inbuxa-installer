@@ -26,6 +26,11 @@ services:
     image: {{.ServerImage}}
     hostname: {{.MailHost}}
     restart: unless-stopped
+    # The server runs as an unprivileged user and holds no capabilities, so
+    # this is what lets it listen on 25, 443, 465 and 993 inside its own
+    # network namespace. Docker sets it already; podman doesn't.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
     ports:
       - "{{.ServerBind}}:8080"
 {{- if .PassThrough}}

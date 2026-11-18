@@ -35,7 +35,7 @@ func render(t *testing.T, s *Stack) (compose, caddy string) {
 
 func TestContainerServerIsInTheProject(t *testing.T) {
 	c, k := render(t, stack(false))
-	for _, want := range []string{"\n  server:\n", "depends_on: [server]", "MAIL_SERVER_URL: http://server:8080", "inbuxa-data:/var/lib/inbuxa"} {
+	for _, want := range []string{"\n  server:\n", "depends_on: [server]", "MAIL_SERVER_URL: http://server:8080", "inbuxa-data:/var/lib/inbuxa", "net.ipv4.ip_unprivileged_port_start: \"0\""} {
 		if !strings.Contains(c, want) {
 			t.Errorf("compose.yaml lacks %q", want)
 		}
