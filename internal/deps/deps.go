@@ -31,6 +31,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -348,10 +349,11 @@ func nodeNeed(f host.Facts) Need {
 	}
 	n.steps = []step{
 		{"fetching node " + nodeVersion, func(ctx context.Context, log io.Writer) error {
-			tmp := filepath.Join(os.TempDir(), "inbuxa-node.tar.xz")
-			if err := fetchVerified(ctx, log, url, sum, tmp, 0o644); err != nil {
+			tmp, cleanup, err := fetchToTemp(ctx, log, url, sum, "inbuxa-node.tar.xz")
+			if err != nil {
 				return err
 			}
+			defer cleanup()
 			// A different version unpacked over the old one would leave
 			// the old one's files behind it.
 			if err := os.RemoveAll("/opt/inbuxa/node"); err != nil {
@@ -482,8 +484,13 @@ func fetchVerified(ctx context.Context, log io.Writer, url, want, dest string, m
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
+	// A new file, never one already at the name: what a failed run left is
+	// removed first, and a link there is removed, not written through.
 	tmp := dest + ".part"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return err
 	}
@@ -568,4 +575,22 @@ func describeOS(o host.OSInfo) string {
 		return o.ID
 	}
 	return "this distribution"
+}
+
+// fetchToTemp downloads url, checked against sum, to a temporary file named
+// name, and returns its path and what removes it. The file is in a new
+// directory only root can reach, so nobody else can put it there first or
+// change it between the checksum and its use.
+func fetchToTemp(ctx context.Context, log io.Writer, url, sum, name string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "inbuxa-fetch-")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { os.RemoveAll(dir) }
+	tmp := filepath.Join(dir, name)
+	if err := fetchVerified(ctx, log, url, sum, tmp, 0o644); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return tmp, cleanup, nil
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/pins"
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/release"
 )
 
@@ -50,7 +51,30 @@ func releasesServer(t *testing.T, bump bool) *httptest.Server {
 			_ = json.NewEncoder(w).Encode(rels)
 		})
 	}
+	mux.HandleFunc("/v2/repositories/library/caddy/tags", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(caddyTags(bump, release.CaddyDigest))
+	})
 	return httptest.NewServer(mux)
+}
+
+// caddyTags is a page of Docker Hub's caddy tags: the pinned version's at
+// digest, a newer patch when bump is true, and the moving and builder tags,
+// which are not versions to move to.
+func caddyTags(bump bool, digest string) map[string][]hubTag {
+	tags := []hubTag{
+		{Name: "alpine", Digest: "sha256:moving"},
+		{Name: "2-alpine", Digest: "sha256:moving"},
+		{Name: "2.11-alpine", Digest: "sha256:moving"},
+		{Name: release.CaddyVersion + "-alpine", Digest: digest},
+		{Name: "9.9.9-builder-alpine", Digest: "sha256:builder"},
+		{Name: "2.99.0-beta.1-alpine", Digest: "sha256:beta"},
+	}
+	if bump {
+		v, _ := pins.Parse(release.CaddyVersion)
+		v.Patch++
+		tags = append(tags, hubTag{Name: v.String() + "-alpine", Digest: "sha256:newer"})
+	}
+	return map[string][]hubTag{"results": tags}
 }
 
 func bumpNum(s string) string {
@@ -62,7 +86,7 @@ func bumpNum(s string) string {
 func TestRunReportsAllCurrentWhenNothingIsNewer(t *testing.T) {
 	srv := releasesServer(t, false)
 	defer srv.Close()
-	code, err := run(context.Background(), srv.Client(), srv.URL, "", false)
+	code, err := run(context.Background(), srv.Client(), srv.URL, srv.URL, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +98,7 @@ func TestRunReportsAllCurrentWhenNothingIsNewer(t *testing.T) {
 func TestRunExits10WhenAPinIsBehind(t *testing.T) {
 	srv := releasesServer(t, true)
 	defer srv.Close()
-	code, err := run(context.Background(), srv.Client(), srv.URL, "", false)
+	code, err := run(context.Background(), srv.Client(), srv.URL, srv.URL, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +112,7 @@ func TestRunErrorsOnABadStatus(t *testing.T) {
 		http.Error(w, "nope", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	if _, err := run(context.Background(), srv.Client(), srv.URL, "", false); err == nil {
+	if _, err := run(context.Background(), srv.Client(), srv.URL, srv.URL, "", false); err == nil {
 		t.Errorf("a 500 from the releases API should be an error")
 	}
 }
@@ -111,5 +135,39 @@ func TestFetchReleasesSkipsDraftsAndKeepsPrereleaseFlag(t *testing.T) {
 	}
 	if got[0].Tag != "v27.1-rc.1" || !got[0].Prerelease || got[1].Tag != "v27.1" || got[1].Prerelease {
 		t.Errorf("releases not carried through faithfully: %+v", got)
+	}
+}
+
+// Caddy is behind when Docker Hub has a newer patch of its series, or when
+// its own version's tag now names another image; the moving tags, the
+// builder images and betas are never a move.
+func TestCheckCaddy(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		bump   bool
+		digest string
+		stale  bool
+		latest string
+	}{
+		{"current", false, release.CaddyDigest, false, ""},
+		{"newer patch", true, release.CaddyDigest, true, ""},
+		{"rebuilt", false, "sha256:rebuilt", true, release.CaddyVersion + " rebuilt, now sha256:rebuilt"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(caddyTags(c.bump, c.digest))
+			}))
+			defer srv.Close()
+			f, stale, err := checkCaddy(context.Background(), srv.Client(), srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stale != c.stale || (c.latest != "" && f.Latest != c.latest) {
+				t.Errorf("stale = %v, finding %+v", stale, f)
+			}
+			if c.bump && (f.Latest == release.CaddyVersion || strings.Contains(f.Latest, "beta") || strings.HasPrefix(f.Latest, "9.")) {
+				t.Errorf("moved to %s", f.Latest)
+			}
+		})
 	}
 }

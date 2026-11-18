@@ -3,14 +3,16 @@
 #
 # Weekly check that the releases this installer pins (internal/release) have
 # not fallen behind the newest release of inbuxa-server, inbuxa-admin and
-# inbuxa-webmail. A fresh install ships whatever release.go names, so a pin
-# left behind is a fresh install shipped stale -- and, if the skipped release
-# fixed a vulnerability, shipped vulnerable.
+# inbuxa-webmail, nor Caddy behind Docker Hub's newest patch of its series or
+# a rebuild of its own version. A fresh install ships whatever release.go
+# names, so a pin left behind is a fresh install shipped stale -- and, if the
+# skipped release fixed a vulnerability, shipped vulnerable.
 #
 # A stale pin fails this run (exit 10) and opens or updates a tracking issue;
-# the fix is a reviewed change to release.go with the new checksums, never an
-# automatic edit. The release reads are public, so they need no token; --issue
-# uses the run token to write the issue in this repository.
+# the fix is a reviewed change to release.go with the new checksums (and
+# Caddy's new digest), never an automatic edit. The release reads are public,
+# so they need no token; --issue uses the run token to write the issue in
+# this repository.
 name: pin-check
 
 on:

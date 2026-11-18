@@ -34,6 +34,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/compose"
@@ -313,7 +314,7 @@ func (m *serverMove) toHost(ctx context.Context, stack compose.Stack, snippets b
 	if err := m.cameBack(ctx, hostSetupBind, func() string { return hs.Logs(ctx, "server", 400) }); err != nil {
 		return back(withLogs(ctx, err, hs, "server"))
 	}
-	srv := &jmap.Client{BaseURL: hostSetupBind, Token: m.key}
+	srv := setupClient(true, jmap.Client{BaseURL: hostSetupBind, Token: m.key})
 	if err := srv.HostListeners(ctx, hostFinalBind, m.local); err != nil {
 		return back(fmt.Errorf("fitting the server's listeners to the host: %w", err))
 	}
@@ -459,6 +460,12 @@ func (m *serverMove) restoreHost(ctx context.Context, why error) error {
 // copied into it: what an earlier install on the host left there is
 // archived, never mixed with this.
 func (m *serverMove) clearForCopy(ctx context.Context, hs hostServer) error {
+	data := filepath.Join(hs.home(), "data")
+	if fi, err := os.Lstat(data); err == nil {
+		if err := isPlainDir(data, fi); err != nil {
+			return err
+		}
+	}
 	entries, _ := os.ReadDir(hs.DataPath())
 	if len(entries) == 0 && !exists(hs.configPath()) {
 		return nil
@@ -507,8 +514,17 @@ func allowOnce(ctx context.Context, srv *jmap.Client, address, reason string) er
 // rewriteDataPath points the data store's description at its new home. Only
 // a path under the old home is changed: a store kept elsewhere (PostgreSQL,
 // a path the operator chose) is left alone.
+//
+// config.json is in the server's home, which the server's user can write, so
+// it is read without following a link and replaced by a rename, never
+// written through whatever is there.
 func rewriteDataPath(configPath, from, to string) error {
-	b, err := os.ReadFile(configPath)
+	f, err := openNoFollow(configPath)
+	if err != nil {
+		return fmt.Errorf("the server's configuration: %w", err)
+	}
+	b, err := io.ReadAll(f)
+	f.Close()
 	if err != nil {
 		return fmt.Errorf("the server's configuration: %w", err)
 	}
@@ -525,11 +541,42 @@ func rewriteDataPath(configPath, from, to string) error {
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(configPath)
+	info, err := os.Lstat(configPath)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, out, info.Mode().Perm())
+	return replaceFile(configPath, out, info.Mode().Perm())
+}
+
+// openNoFollow opens a file for reading, refusing a symbolic link.
+func openNoFollow(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, fmt.Errorf("%s is a symbolic link, which the installer will not follow there", path)
+	}
+	return f, err
+}
+
+// replaceFile puts content at path by writing a new file beside it and
+// renaming it over the old one: a link at path is replaced, not followed.
+func replaceFile(path string, content []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // moveContents renames everything in src into dest, which is made if need
@@ -553,7 +600,7 @@ func moveContents(src, dest string) error {
 }
 
 func copyFile(src, dest string, mode os.FileMode) error {
-	in, err := os.Open(src)
+	in, err := openNoFollow(src)
 	if err != nil {
 		return err
 	}

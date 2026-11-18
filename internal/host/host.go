@@ -477,6 +477,34 @@ func surveyPort(n int, for_ string) Port {
 // /proc, which means it only sees the whole truth as root; a guess is better
 // than nothing and the caller treats it as one.
 func holderOf(port int) string {
+	inodes := listenInodes(port)
+	if len(inodes) == 0 {
+		return ""
+	}
+	procs, err := filepath.Glob("/proc/[0-9]*/fd/*")
+	if err != nil {
+		return ""
+	}
+	for _, fd := range procs {
+		link, err := os.Readlink(fd)
+		if err != nil || !strings.HasPrefix(link, "socket:[") {
+			continue
+		}
+		inode := strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]")
+		if !inodes[inode] {
+			continue
+		}
+		pid := strings.Split(fd, "/")[2]
+		if comm, err := os.ReadFile("/proc/" + pid + "/comm"); err == nil {
+			return strings.TrimSpace(string(comm)) + " (pid " + pid + ")"
+		}
+	}
+	return ""
+}
+
+// listenInodes are the socket inodes listening on a TCP port, on any
+// address, IPv4 or IPv6.
+func listenInodes(port int) map[string]bool {
 	inodes := map[string]bool{}
 	for _, tab := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
 		file, err := os.Open(tab)
@@ -505,28 +533,35 @@ func holderOf(port int) string {
 		}
 		file.Close()
 	}
+	return inodes
+}
+
+// portHeldBy is nil when every socket listening on port is the process
+// pid's own, and says why not otherwise.
+func portHeldBy(port, pid int) error {
+	inodes := listenInodes(port)
 	if len(inodes) == 0 {
-		return ""
+		return fmt.Errorf("nothing listens on port %d yet", port)
 	}
-	procs, err := filepath.Glob("/proc/[0-9]*/fd/*")
+	fds, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", pid))
 	if err != nil {
-		return ""
+		return fmt.Errorf("the sockets of pid %d: %w", pid, err)
 	}
-	for _, fd := range procs {
-		link, err := os.Readlink(fd)
+	for _, fd := range fds {
+		link, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%s", pid, fd.Name()))
 		if err != nil || !strings.HasPrefix(link, "socket:[") {
 			continue
 		}
-		inode := strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]")
-		if !inodes[inode] {
-			continue
-		}
-		pid := strings.Split(fd, "/")[2]
-		if comm, err := os.ReadFile("/proc/" + pid + "/comm"); err == nil {
-			return strings.TrimSpace(string(comm)) + " (pid " + pid + ")"
-		}
+		delete(inodes, strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]"))
 	}
-	return ""
+	if len(inodes) == 0 {
+		return nil
+	}
+	who := holderOf(port)
+	if who == "" {
+		who = "another process"
+	}
+	return fmt.Errorf("port %d is held by %s, not pid %d", port, who, pid)
 }
 
 func memoryMB() int {
@@ -603,3 +638,7 @@ func Systemd() bool { return isSystemd() }
 // HolderOf names the process listening on a port, as well as /proc lets it:
 // "postfix (pid 812)", or "" when it can't tell.
 func HolderOf(port int) string { return holderOf(port) }
+
+// PortHeldBy is nil when everything listening on a TCP port is process
+// pid's, and says what else is there otherwise.
+func PortHeldBy(port, pid int) error { return portHeldBy(port, pid) }

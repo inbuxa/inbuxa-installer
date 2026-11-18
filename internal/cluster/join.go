@@ -24,11 +24,16 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"git.coffeylabs.org/inbuxa/inbuxa-installer/internal/topology"
 )
@@ -142,7 +147,10 @@ func BuildPlan(c Config) (*Plan, error) {
 			if _, err := os.Stat(dst); err != nil {
 				return nil, fmt.Errorf("%s is not at %s and no secret_from says where to install it from", s.what, dst)
 			}
-			continue // already in place, left as it is
+			continue // already in place, left as it is, and only the server reads it
+		}
+		if err := c.notALink(dst); err != nil {
+			return nil, err
 		}
 		if _, err := os.Stat(s.from); err != nil {
 			return nil, fmt.Errorf("%s: the source %s is not there", s.what, s.from)
@@ -152,9 +160,14 @@ func BuildPlan(c Config) (*Plan, error) {
 
 	// The existing config.json, kept aside once so a node can be put back on
 	// its old store. Only when there is one and no copy has been made before.
-	if _, err := os.Stat(c.configPath()); err == nil {
-		backup := c.configPath() + ".prev"
-		if _, err := os.Stat(backup); err != nil {
+	backup := c.configPath() + ".prev"
+	for _, f := range []string{c.configPath(), backup} {
+		if err := c.notALink(f); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := os.Lstat(c.configPath()); err == nil {
+		if _, err := os.Lstat(backup); err != nil {
 			p.Backup = backup
 		}
 	}
@@ -239,18 +252,26 @@ func orderDropIn(after []string) string {
 // Apply carries out the plan: the secrets, then the store config, then the
 // drop-ins, then a reload and restart. The order matters -- the config and its
 // secret are in place before the server is told to read them.
+//
+// The server's directory is the server user's, so whatever is in it may have
+// been put there by that user. Nothing is read or written there through a
+// symbolic link: config.json is read without following one, and every file
+// is written beside its place, given to the server's user by its descriptor,
+// and renamed into place, which replaces a link instead of writing through it.
 func Apply(ctx context.Context, p *Plan) error {
 	c := p.Config
 	run := c.run()
+	owner := c.owner()
 
 	if p.Backup != "" {
 		c.log("keeping the old store config at %s", p.Backup)
 		if !c.DryRun {
-			if err := copyFile(c.configPath(), p.Backup, 0o600); err != nil {
-				return fmt.Errorf("saving the old config aside: %w", err)
+			b, err := readNoFollow(c.configPath())
+			if err == nil {
+				err = putFile(p.Backup, b, 0o600, owner)
 			}
-			if c.User != "" {
-				chown(ctx, run, c.User, p.Backup)
+			if err != nil {
+				return fmt.Errorf("saving the old config aside: %w", err)
 			}
 		}
 	}
@@ -274,17 +295,22 @@ func Apply(ctx context.Context, p *Plan) error {
 		if err := os.MkdirAll(filepath.Dir(w.Path), 0o750); err != nil {
 			return err
 		}
-		if w.From != "" {
-			if err := copyFile(w.From, w.Path, w.Mode); err != nil {
-				return fmt.Errorf("installing %s from %s: %w", w.Path, w.From, err)
-			}
-		} else if err := os.WriteFile(w.Path, []byte(w.Content), w.Mode); err != nil {
-			return err
-		}
 		// Secrets and the store config are the server's to read; the drop-ins
 		// are root's, as systemd wants them.
-		if c.User != "" && withinEtc(c, w.Path) {
-			chown(ctx, run, c.User, w.Path)
+		var to *ids
+		if withinEtc(c, w.Path) {
+			to = owner
+		}
+		if w.From != "" {
+			b, err := os.ReadFile(w.From)
+			if err == nil {
+				err = putFile(w.Path, b, w.Mode, to)
+			}
+			if err != nil {
+				return fmt.Errorf("installing %s from %s: %w", w.Path, w.From, err)
+			}
+		} else if err := putFile(w.Path, []byte(w.Content), w.Mode, to); err != nil {
+			return err
 		}
 	}
 
@@ -312,21 +338,77 @@ func withinEtc(c Config, path string) bool {
 	return err == nil && !strings.HasPrefix(rel, "..")
 }
 
-func chown(ctx context.Context, run func(context.Context, string, ...string) error, user, path string) {
-	// Best effort: ownership needs root, and a dry run or a test without it
-	// should not fail over it. The mode is what keeps a secret unreadable.
-	_ = run(ctx, "chown", user+":"+user, path)
+// notALink refuses a symbolic link at a path in the server's directory,
+// which the join would read or write as root.
+func (c Config) notALink(path string) error {
+	if !withinEtc(c, path) {
+		return nil // a path the operator chose, outside the server's directory
+	}
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symbolic link, in a directory the server's user can write; the join "+
+			"will not read or write through it. Look at where it points, then move it aside and run this again", path)
+	}
+	return nil
 }
 
-func copyFile(src, dst string, mode os.FileMode) error {
-	b, err := os.ReadFile(src)
+// ids are the server user's, for the files written for it.
+type ids struct{ uid, gid int }
+
+// owner is the server's user, or nil when none is named or it can't be
+// found. Ownership is best effort, as it needs root, and a dry run or a test
+// without it should not fail over it: the mode is what keeps a secret
+// unreadable.
+func (c Config) owner() *ids {
+	if c.User == "" {
+		return nil
+	}
+	u, err := user.Lookup(c.User)
+	if err != nil {
+		return nil
+	}
+	uid, err1 := strconv.Atoi(u.Uid)
+	gid, err2 := strconv.Atoi(u.Gid)
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+	return &ids{uid, gid}
+}
+
+// readNoFollow reads a file, refusing a symbolic link.
+func readNoFollow(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, fmt.Errorf("%s is a symbolic link, which the join will not follow", path)
+		}
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// putFile writes content to a new file beside path, gives it its mode and
+// owner through the open file, and renames it over path.
+func putFile(path string, content []byte, mode os.FileMode, owner *ids) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(dst, b, mode); err != nil {
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(content)
+	if err == nil {
+		err = tmp.Chmod(mode)
+	}
+	if err == nil && owner != nil {
+		_ = tmp.Chown(owner.uid, owner.gid) // best effort, as above
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return err
 	}
-	return os.Chmod(dst, mode)
+	return os.Rename(tmp.Name(), path)
 }
 
 // String renders the plan the way --dry-run shows it, in the installer's
