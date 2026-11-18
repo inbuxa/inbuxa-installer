@@ -311,6 +311,37 @@ func FetchDNSZone(ctx context.Context, st *state.State, domain, key string) (str
 	return zone, nil
 }
 
+// ZoneNamesHost is whether a zone fragment names host anywhere: as an MX,
+// a service record's target, or in SPF. The records follow the server's own
+// hostname, so a zone that never names this install's mail host was written
+// before a rename, or by a server still called something else (#83). An MX
+// pointing at a relay is fine: the service records still name the server.
+func ZoneNamesHost(zone, host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if host == "" {
+		return true
+	}
+	for _, f := range strings.FieldsFunc(strings.ToLower(zone), func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '"' || r == ':' || r == ';'
+	}) {
+		if strings.TrimSuffix(f, ".") == host {
+			return true
+		}
+	}
+	return false
+}
+
+// StaleZoneHint says what to do about a zone that doesn't name the mail host.
+func StaleZoneHint(host string, live bool) string {
+	if live {
+		return "These records don't name " + host + ": the server still calls itself something else. Set its\n" +
+			"hostname in the console (Settings, Network, General) and run this again."
+	}
+	return "These records don't name " + host + ", this install's mail host: they were saved before it\n" +
+		"was renamed. Once the server's hostname is " + host + " (in the console: Settings, Network,\n" +
+		"General), read them again with\n  inbuxa dns --refresh --key -"
+}
+
 // CertsLogHint is where the server says why an order failed.
 func CertsLogHint(st *state.State) string {
 	if st.Shapes["server"] == "host" {
