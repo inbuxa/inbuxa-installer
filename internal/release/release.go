@@ -25,7 +25,7 @@ import (
 )
 
 // ServerVersion is the inbuxa-server release this installer installs.
-const ServerVersion = "27.1-rc.28"
+const ServerVersion = "27.1-rc.31"
 
 // ServerImage is that release as a container image.
 const ServerImage = "registry.coffeylabs.org/inbuxa/inbuxa-server:" + ServerVersion
@@ -52,8 +52,8 @@ const CaddyImage = "docker.io/library/caddy@" + CaddyDigest
 // rather than fetched beside the download: a checksum that arrives with the
 // file only proves the file arrived.
 var ServerSHA256 = map[string]string{
-	"amd64": "9adaecab190877810578a067f5dad7770575470a7c05972112b13eeedee8bb22",
-	"arm64": "7937d1666014bb7a61d856394413461111db85ac9584855f1d702f0bfecf49bb",
+	"amd64": "1c844d7f444772511296ce95e14a62656bf9058c0181430773d2bd8ee3b7df03",
+	"arm64": "cef3b1b2208891cd2f9aa08f42ec46d451007a3d40082ff60af7414614c0859a",
 }
 
 // ServerTarball is where the release's tarball for an architecture is.
@@ -101,8 +101,8 @@ func WebmailTarball(arch string) string {
 //
 // RelaySHA256 is the SHA-256 of each architecture's relay binary.
 var RelaySHA256 = map[string]string{
-	"amd64": "7f6b3247995ac218d30e8060bb43ddccc03eaebf459c8a422a8e478d52c3610f",
-	"arm64": "d621a92d2f2d06099281877bc20b3989470fa30521dad1c3d0043209b607785d",
+	"amd64": "8ccadeb1e69ac81f757ecd8087ff747c1ba119978d8ff3ea8fd2f593aa04446a",
+	"arm64": "960f436e056b0d9ceeb6810bf5484e0f2b613899ea680628b2c8a1ff1a99c020",
 }
 
 // RelayKeys are the inbuxa release keys that sign a relay binary, as
