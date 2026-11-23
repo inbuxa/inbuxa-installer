@@ -326,3 +326,16 @@ func TestNetworkCarriesIPv6WhenTheMachineHasIt(t *testing.T) {
 		t.Errorf("the IPv4 gateway moved: %q", s.GatewayIP)
 	}
 }
+
+func TestEveryContainerLogIsCapped(t *testing.T) {
+	for _, s := range []*Stack{stack(false), stack(true)} {
+		c, _ := render(t, s)
+		if !strings.Contains(c, "x-logging: &logging\n  driver: json-file\n  options:\n    max-size: 50m\n    max-file: \"3\"\n") {
+			t.Errorf("compose.yaml has no capped log:\n%s", c)
+		}
+		services := strings.Count(c, "    restart: unless-stopped\n")
+		if capped := strings.Count(c, "    restart: unless-stopped\n    logging: *logging\n"); services == 0 || capped != services {
+			t.Errorf("%d of %d services have the capped log:\n%s", capped, services, c)
+		}
+	}
+}
