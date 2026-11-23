@@ -25,7 +25,7 @@ import (
 )
 
 // ServerVersion is the inbuxa-server release this installer installs.
-const ServerVersion = "27.1-rc.32"
+const ServerVersion = "27.1-rc.41"
 
 // ServerImage is that release as a container image.
 const ServerImage = "registry.coffeylabs.org/inbuxa/inbuxa-server:" + ServerVersion
@@ -52,8 +52,8 @@ const CaddyImage = "docker.io/library/caddy@" + CaddyDigest
 // rather than fetched beside the download: a checksum that arrives with the
 // file only proves the file arrived.
 var ServerSHA256 = map[string]string{
-	"amd64": "be77d58a40faa17e325ba2730981fd9ae8237f528da982d9e491b8c26091c973",
-	"arm64": "396f2312ccfeae4f5c6e7a0575e2fa61d9728197e0339a2628bd5923681dedfc",
+	"amd64": "81f88cd67c60542b68562ca7675cc4c768ae4056165d31bd74e2d73685c5cc30",
+	"arm64": "be3f50ab5c37b36ef051d72c9fc652b3337526f20468a9dca2c7a982a9de9953",
 }
 
 // ServerTarball is where the release's tarball for an architecture is.
@@ -68,15 +68,15 @@ func ServerTarball(arch string) string {
 // unavailable until one does. INBUXA_CONSOLE_TARBALL and
 // INBUXA_WEBMAIL_TARBALL name a local file instead, for testing.
 const (
-	ConsoleVersion = "27.1-rc.21"
-	ConsoleSHA256  = "2a946c29c43dd5124186357ca3d8480ef012238b5927e6339972c36077cee775"
-	WebmailVersion = "27.1-rc.7" // its tag is inbuxa-v<this>
+	ConsoleVersion = "27.1-rc.24"
+	ConsoleSHA256  = "70a4f244b5d73711bb604e75e1e8cb00d3824578740547c3ecdbea25a1122932"
+	WebmailVersion = "27.1-rc.14" // its tag is inbuxa-v<this>
 )
 
 // WebmailSHA256 is the SHA-256 of each architecture's webmail tarball.
 var WebmailSHA256 = map[string]string{
-	"amd64": "de2f66529f1eb19c3499c2b9e7e91d07605e29dbe97d58cdd9609aab0d7ecd83",
-	"arm64": "05b8b534801a2f0828f84314dc3cdae7a1dc2612f16268aebedbf2961fde71a3",
+	"amd64": "1aaffc0b4570e5ad03d232297d69499d79333b50fe90d9259dc433060885b2eb",
+	"arm64": "20b59ad60193cbec8ea34e6287ae7d3232ffcca304f4d61de44f1198b7af4ff7",
 }
 
 // ConsoleTarball is where the console's release tarball is.
@@ -101,8 +101,8 @@ func WebmailTarball(arch string) string {
 //
 // RelaySHA256 is the SHA-256 of each architecture's relay binary.
 var RelaySHA256 = map[string]string{
-	"amd64": "d92a1a68c4286d0ad642b0ed8667f30e954b4db730e931b7ae2531c7bfd3dfde",
-	"arm64": "787a14710f7a7c4c63dc762c69d3e1a89c5c90038615a451ad359b77104148d3",
+	"amd64": "39be7348eda2163d0746cbe42fb4850b32610979cf16c46b05950d404aec0bc9",
+	"arm64": "5ef8de5b195c4197f696e9c8533fd58f75995667e44b2f64c68bdddb257773e9",
 }
 
 // RelayKeys are the inbuxa release keys that sign a relay binary, as
