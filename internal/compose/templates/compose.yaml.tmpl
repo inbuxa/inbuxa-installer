@@ -20,12 +20,22 @@
 {{- end}}
 name: {{.Project}}
 
+# Every container's log, capped: 3 files of 50 MB each. Docker's default
+# json-file driver never rotates, and the server writes its log to standard
+# output as well as to its log file. `docker compose logs` reads these.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 50m
+    max-file: "3"
+
 services:
 {{- if .Server}}
   server:
     image: {{.ServerImage}}
     hostname: {{.MailHost}}
     restart: unless-stopped
+    logging: *logging
     # The server runs as an unprivileged user and holds no capabilities, so
     # this is what lets it listen on 25, 443, 465 and 993 inside its own
     # network namespace. Docker sets it already; podman doesn't.
@@ -76,6 +86,7 @@ services:
   console:
     image: {{.ConsoleImage}}
     restart: unless-stopped
+    logging: *logging
 {{- if .Server}}
     depends_on: [server]
 {{- end}}
@@ -98,6 +109,7 @@ services:
   webmail:
     image: {{.WebmailImage}}
     restart: unless-stopped
+    logging: *logging
 {{- if .Server}}
     depends_on: [server]
 {{- end}}
@@ -154,6 +166,7 @@ services:
   caddy:
     image: {{.CaddyImage}}
     restart: unless-stopped
+    logging: *logging
 {{- if .Server}}
     depends_on: [server]
 {{- end}}
