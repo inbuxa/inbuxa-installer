@@ -179,11 +179,20 @@ CA, with no internet and no public name involved.
 Each release has static binaries for linux/amd64 and linux/arm64, and a
 SHA256SUMS to check them against:
 
-    V=v2026.11.6     # the newest: https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/latest
+    V=v2026.11.27    # the newest: https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/latest
     curl -fLO https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/download/$V/inbuxa-linux-amd64
     curl -fLO https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/download/$V/SHA256SUMS
     sha256sum --check --ignore-missing SHA256SUMS
     install -m 755 inbuxa-linux-amd64 /usr/local/bin/inbuxa
+
+From the first release after v2026.11.27, SHA256SUMS is signed with
+[minisign](https://jedisct1.github.io/minisign/), so you can confirm it came
+from us before trusting the checksums. `SHA256SUMS.minisig` is the signature:
+
+    curl -fLO https://git.coffeylabs.org/inbuxa/inbuxa-installer/releases/download/$V/SHA256SUMS.minisig
+    minisign -Vm SHA256SUMS -P RWS1yFYwVuJ7MGJTZXLbhv9+hrEsjrC8Zg+7WmPlM86Sjy0qF/xkoCKq
+
+The same public key signs every inbuxa release (installer, migrate and cli).
 
 A release is a `v<year>.<month>.<day>` tag on main; `.gitea/workflows/release.yml`
 builds it with `scripts/build-release.sh`, which builds the same thing
